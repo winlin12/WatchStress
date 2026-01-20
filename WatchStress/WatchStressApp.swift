@@ -11,7 +11,7 @@ import SwiftUI
 struct WatchStressApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            iOSRootView()
         }
     }
 }

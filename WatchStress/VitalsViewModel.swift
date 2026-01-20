@@ -4,6 +4,7 @@
 //  Bridges HealthKit values to SwiftUI-friendly strings for display.
 
 import Foundation
+import Combine
 import HealthKit
 
 @MainActor
