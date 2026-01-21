@@ -7,11 +7,13 @@
 
 import SwiftUI
 
+/// Main entry point for the watchOS app.
+/// Creates the initial window group and shows WatchRootView.
 @main
 struct WatchStress_Watch_AppApp: App {
     var body: some Scene {
         WindowGroup {
-            WatchRootView()
+            WatchRootView() // Root content view for the watch app
         }
     }
 }

@@ -7,23 +7,30 @@ import Foundation
 import Combine
 import HealthKit
 
+/// VitalsViewModel bridges HealthKit values to SwiftUI-friendly strings.
+/// It requests authorization (via HealthKitManager) and exposes formatted metrics
+/// suitable for display in the UI. All published properties are updated on the main actor.
+
+/// Observable object that loads and formats core/optional vitals.
 @MainActor
 final class VitalsViewModel: ObservableObject {
-    @Published var authorized: Bool = false
+    @Published var authorized: Bool = false            // Whether HealthKit authorization succeeded
 
-    @Published var sleep: String = "—"
-    @Published var restingHR: String = "—"
-    @Published var heartRate: String = "—"
-    @Published var hrvSDNN: String = "—"
-    @Published var bloodPressure: String = "—"
-    @Published var wristTemperature: String = "—"
-    @Published var steps: String = "—"
-    @Published var exerciseMinutes: String = "—"
-    @Published var respirationRate: String = "—"
-    @Published var bloodOxygen: String = "—"
+    @Published var sleep: String = "—"                 // Last night's total sleep (e.g., "7h 45m")
+    @Published var restingHR: String = "—"             // Most recent resting heart rate (e.g., "54 bpm")
+    @Published var heartRate: String = "—"             // Latest heart rate sample (e.g., "72 bpm")
+    @Published var hrvSDNN: String = "—"               // Most recent HRV SDNN (e.g., "42 ms")
+    @Published var bloodPressure: String = "—"         // Most recent BP (e.g., "120/80 mmHg") — optional/external
+    @Published var wristTemperature: String = "—"      // Wrist/body temperature (°C) — optional
+    @Published var steps: String = "—"                 // Today's step count
+    @Published var exerciseMinutes: String = "—"       // Today's exercise minutes
+    @Published var respirationRate: String = "—"       // Most recent respiration rate (brpm) — optional
+    @Published var bloodOxygen: String = "—"           // Most recent SpO₂ (%) — optional
 
     private let hk = HealthKitManager.shared
 
+    /// Requests HealthKit authorization and, if successful, loads all metrics.
+    /// Safe to call multiple times; authorization is only requested once by the system.
     func requestAuthorizationAndLoad() {
         hk.requestAuthorization { [weak self] success, _ in
             Task { @MainActor in
@@ -35,6 +42,7 @@ final class VitalsViewModel: ObservableObject {
         }
     }
 
+    /// Reloads all supported metrics in parallel and updates published strings.
     func reloadAll() async {
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await self.loadSleep() }
@@ -50,8 +58,7 @@ final class VitalsViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Individual loaders
-
+    /// Loads last night's total sleep duration and formats as "Xh Ym".
     private func loadSleep() async {
         await withCheckedContinuation { continuation in
             hk.lastNightSleepDuration { [weak self] duration in
@@ -67,6 +74,7 @@ final class VitalsViewModel: ObservableObject {
         }
     }
 
+    /// Loads the most recent resting heart rate (bpm).
     private func loadRestingHeartRate() async {
         guard let type = HKObjectType.quantityType(forIdentifier: .restingHeartRate) else { return }
         await withCheckedContinuation { continuation in
@@ -82,6 +90,7 @@ final class VitalsViewModel: ObservableObject {
         }
     }
 
+    /// Loads the latest heart rate sample (bpm).
     private func loadLatestHeartRate() async {
         guard let type = HKObjectType.quantityType(forIdentifier: .heartRate) else { return }
         await withCheckedContinuation { continuation in
@@ -97,6 +106,7 @@ final class VitalsViewModel: ObservableObject {
         }
     }
 
+    /// Loads the most recent HRV SDNN (milliseconds).
     private func loadHRV() async {
         guard let type = HKObjectType.quantityType(forIdentifier: .heartRateVariabilitySDNN) else { return }
         await withCheckedContinuation { continuation in
@@ -112,6 +122,7 @@ final class VitalsViewModel: ObservableObject {
         }
     }
 
+    /// Loads the most recent systolic/diastolic blood pressure (mmHg) — optional/external.
     private func loadBloodPressure() async {
         guard let systolicType = HKObjectType.quantityType(forIdentifier: .bloodPressureSystolic),
               let diastolicType = HKObjectType.quantityType(forIdentifier: .bloodPressureDiastolic) else { return }
@@ -151,6 +162,7 @@ final class VitalsViewModel: ObservableObject {
         }
     }
 
+    /// Loads wrist/body temperature (°C) — optional.
     private func loadTemperature() async {
         var value: Double?
         if #available(iOS 16.0, *), let wristType = HKObjectType.quantityType(forIdentifier: .appleSleepingWristTemperature) {
@@ -178,6 +190,7 @@ final class VitalsViewModel: ObservableObject {
         }
     }
 
+    /// Loads today's step count.
     private func loadSteps() async {
         guard let type = HKObjectType.quantityType(forIdentifier: .stepCount) else { return }
         await withCheckedContinuation { continuation in
@@ -193,6 +206,7 @@ final class VitalsViewModel: ObservableObject {
         }
     }
 
+    /// Loads today's exercise minutes.
     private func loadExerciseMinutes() async {
         guard let type = HKObjectType.quantityType(forIdentifier: .appleExerciseTime) else { return }
         await withCheckedContinuation { continuation in
@@ -208,6 +222,7 @@ final class VitalsViewModel: ObservableObject {
         }
     }
 
+    /// Loads the most recent respiration rate (breaths per minute) — optional.
     private func loadRespirationRate() async {
         guard let type = HKObjectType.quantityType(forIdentifier: .respiratoryRate) else { return }
         await withCheckedContinuation { continuation in
@@ -223,6 +238,7 @@ final class VitalsViewModel: ObservableObject {
         }
     }
 
+    /// Loads the most recent blood oxygen saturation (%) — optional.
     private func loadBloodOxygen() async {
         guard let type = HKObjectType.quantityType(forIdentifier: .oxygenSaturation) else { return }
         await withCheckedContinuation { continuation in
