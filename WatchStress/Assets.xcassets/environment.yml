@@ -1,0 +1,13 @@
+name: watchstress
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy
+  - pandas
+  - scikit-learn
+  - scipy
+  - pip
+  - pip:
+      # optional, only if you want nicer progress bars / CLI
+      - tqdm
