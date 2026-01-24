@@ -1,61 +1,133 @@
 #!/usr/bin/env python3
-import argparse, json, os, pickle, zipfile
+import argparse, json, os, pickle
 from dataclasses import dataclass
-from typing import Dict, List, Tuple, Optional
+from typing import List, Tuple, Optional
 
 import numpy as np
 
 # Optional: sklearn for a clean logistic regression fit
 try:
     from sklearn.linear_model import LogisticRegression
-    SKLEARN_OK = True
+    SKLEARN_AVAILABLE = True
 except Exception:
-    SKLEARN_OK = False
+    SKLEARN_AVAILABLE = False
+
+LABEL_FS_HZ = 700.0
+WRIST_FS_HZ = {"ACC": 32.0, "BVP": 64.0, "EDA": 4.0, "TEMP": 4.0}
+CHEST_FS_HZ = {"ECG": LABEL_FS_HZ}
+
+def bandpass_fft(x: np.ndarray, fs_hz: float, f_lo: float = 0.7, f_hi: float = 3.0) -> np.ndarray:
+    if len(x) == 0:
+        return x
+    x = x.astype(float) - float(np.mean(x))
+    X = np.fft.rfft(x)
+    freqs = np.fft.rfftfreq(len(x), d=1.0 / fs_hz)
+    mask = (freqs >= f_lo) & (freqs <= f_hi)
+    X_filt = np.zeros_like(X)
+    X_filt[mask] = X[mask]
+    return np.fft.irfft(X_filt, n=len(x))
 
 
-# -----------------------------
-# Helpers to read E4 CSV format
-# -----------------------------
-import os
-import numpy as np
+def detect_peaks_simple(x: np.ndarray, fs_hz: float, max_bpm: float = 180.0) -> np.ndarray:
+    if len(x) < 3:
+        return np.array([], dtype=int)
+    mid = x[1:-1]
+    peaks = np.where((mid > x[:-2]) & (mid >= x[2:]))[0] + 1
+    if len(peaks) == 0:
+        return np.array([], dtype=int)
+    thr = float(np.mean(x) + 0.5 * np.std(x))
+    peaks = peaks[x[peaks] > thr]
+    if len(peaks) == 0:
+        return np.array([], dtype=int)
+    min_dist = int(fs_hz * 60.0 / max_bpm)
+    keep: List[int] = []
+    last = -min_dist
+    for p in peaks:
+        if p - last >= min_dist:
+            keep.append(int(p))
+            last = p
+    return np.array(keep, dtype=int)
 
-def read_e4_signal_from_folder(folder: str, filename: str):
-    """
-    E4 CSV format:
-      row0: unix start time
-      row1: sample rate (Hz)
-      rows2+: samples (1 col for TEMP/BVP/EDA, 3 cols for ACC)
-    Returns: (start_unix, fs_hz, samples)
-    """
-    path = os.path.join(folder, filename)
-    arr = np.loadtxt(path, delimiter=",", dtype=float)
-    if arr.ndim == 1:
-        start = float(arr[0])
-        fs = float(arr[1])
-        data = arr[2:].reshape(-1, 1)
+
+def ecg_peaks_from_signal(ecg: np.ndarray, fs_hz: float) -> np.ndarray:
+    if len(ecg) < int(fs_hz * 5):
+        return np.array([], dtype=int)
+    # Basic ECG processing: bandpass for QRS, rectify + smooth, detect peaks.
+    filt = bandpass_fft(ecg, fs_hz, f_lo=5.0, f_hi=15.0)
+    rect = np.abs(filt)
+    win = max(3, int(0.05 * fs_hz))
+    if win > 1:
+        kernel = np.ones(win) / win
+        smooth = np.convolve(rect, kernel, mode="same")
     else:
-        start = float(arr[0, 0])
-        fs = float(arr[1, 0])
-        data = arr[2:, :]
-    return start, fs, data
+        smooth = rect
+    return detect_peaks_simple(smooth, fs_hz, max_bpm=200.0)
 
 
-def read_ibi_from_folder_if_exists(folder: str):
-    """
-    IBI.csv format:
-      row0: unix start time, literal "IBI" marker
-      col0: time since start (s)
-      col1: ibi duration (s)
-    """
-    for cand in ("IBI.csv", "ibi.csv"):
-        path = os.path.join(folder, cand)
-        if os.path.exists(path):
-            arr = np.loadtxt(path, delimiter=",", dtype=float, skiprows=1)
-            if arr.ndim == 1:
-                arr = arr.reshape(-1, 2)
-            return arr
-    return None
+def ibi_from_peaks(peaks: np.ndarray, fs_hz: float) -> Tuple[np.ndarray, np.ndarray]:
+    if len(peaks) < 2:
+        return np.array([], dtype=float), np.array([], dtype=float)
+    peak_times = peaks.astype(float) / fs_hz
+    ibi_values = np.diff(peak_times)
+    ibi_times = peak_times[1:]
+    return ibi_times, ibi_values
 
+
+def hr_hrv_from_ibi_window(
+    ibi_times: np.ndarray,
+    ibi_values: np.ndarray,
+    t0: float,
+    t1: float,
+) -> Optional[Tuple[float, float]]:
+    mask = (ibi_times >= t0) & (ibi_times < t1)
+    ibi = ibi_values[mask]
+    if len(ibi) < 2:
+        return None
+    min_bpm, max_bpm = 40.0, 200.0
+    ibi = ibi[(ibi >= 60.0 / max_bpm) & (ibi <= 60.0 / min_bpm)]
+    if len(ibi) < 2:
+        return None
+    med = float(np.median(ibi))
+    ibi = ibi[(ibi > 0.85 * med) & (ibi < 1.15 * med)]
+    if len(ibi) < 2:
+        return None
+    hr_mean = 60.0 / float(np.mean(ibi))
+    sdnn_ms = float(np.std(ibi * 1000.0, ddof=1)) if len(ibi) > 1 else 0.0
+    return hr_mean, sdnn_ms
+
+
+def sigmoid(z: np.ndarray) -> np.ndarray:
+    z = np.clip(z, -50.0, 50.0)
+    return 1.0 / (1.0 + np.exp(-z))
+
+
+def fit_logistic_newton(
+    X: np.ndarray,
+    y: np.ndarray,
+    l2: float = 1.0,
+    max_iter: int = 50,
+    tol: float = 1e-6,
+) -> Tuple[np.ndarray, float]:
+    n, d = X.shape
+    w = np.zeros(d, dtype=float)
+    b = 0.0
+    for _ in range(max_iter):
+        z = X @ w + b
+        p = sigmoid(z)
+        W = p * (1.0 - p)
+        grad_w = X.T @ (p - y) + l2 * w
+        grad_b = float(np.sum(p - y))
+        Xw = X * W[:, None]
+        H = X.T @ Xw + l2 * np.eye(d)
+        try:
+            step_w = np.linalg.solve(H, grad_w)
+        except np.linalg.LinAlgError:
+            break
+        w -= step_w
+        b -= grad_b / (np.sum(W) + 1e-6)
+        if np.linalg.norm(step_w) < tol and abs(grad_b) < tol:
+            break
+    return w, b
 
 
 # -----------------------------
@@ -73,16 +145,12 @@ class WindowFeatures:
 def extract_features_for_window(
     t0: float,
     t1: float,
-    temp_start: float,
-    temp_fs: float,
     temp: np.ndarray,
-    hr_start: float,
-    hr_fs: float,
-    hr: np.ndarray,
-    acc_start: float,
-    acc_fs: float,
+    temp_fs: float,
     acc: np.ndarray,
-    ibi: Optional[np.ndarray],
+    acc_fs: float,
+    ibi_times: np.ndarray,
+    ibi_values: np.ndarray,
 ) -> Optional[WindowFeatures]:
     """
     Window is [t0, t1] seconds from session start.
@@ -94,13 +162,6 @@ def extract_features_for_window(
         return None
     temp_mean = float(np.mean(temp[temp_i0:temp_i1, 0]))
 
-    # HR mean (bpm)
-    hr_i0 = int(max(0, np.floor(t0 * hr_fs)))
-    hr_i1 = int(min(len(hr), np.ceil(t1 * hr_fs)))
-    if hr_i1 - hr_i0 < max(2, int(0.25 * (t1 - t0) * hr_fs)):
-        return None
-    hr_mean = float(np.mean(hr[hr_i0:hr_i1, 0]))
-
     # ACC RMS magnitude
     acc_i0 = int(max(0, np.floor(t0 * acc_fs)))
     acc_i1 = int(min(len(acc), np.ceil(t1 * acc_fs)))
@@ -110,18 +171,13 @@ def extract_features_for_window(
     # ACC is in "1/64g" in raw E4 files for WESAD; convert to g.
     seg_g = seg / 64.0
     mag = np.linalg.norm(seg_g, axis=1)
-    acc_rms = float(np.sqrt(np.mean(mag ** 2)))
+    acc_rms = float(np.std(mag, ddof=1))
 
-    # IBI -> resting HR + SDNN (if available)
-    # SDNN is std dev of NN intervals, typically ms.
-    sdnn_ms = np.nan
-    if ibi is not None:
-        # Filter beats whose timestamps fall within window
-        mask = (ibi[:, 0] >= t0) & (ibi[:, 0] < t1)
-        ibi_win = ibi[mask, 1]  # seconds
-        if len(ibi_win) >= 5:
-            ibi_ms = ibi_win * 1000.0
-            sdnn_ms = float(np.std(ibi_ms, ddof=1))
+    # ECG peaks -> HR mean + SDNN
+    hr_res = hr_hrv_from_ibi_window(ibi_times, ibi_values, t0, t1)
+    if hr_res is None:
+        return None
+    hr_mean, sdnn_ms = hr_res
 
     return WindowFeatures(
         hr_mean_bpm=hr_mean,
@@ -152,6 +208,9 @@ def main():
     ap.add_argument("--stride_s", type=float, default=60.0)
     ap.add_argument("--out", default="priors.json")
     ap.add_argument("--subjects", default="", help="Comma-separated subject IDs (e.g., S2,S3). Empty = auto-detect")
+    ap.add_argument("--weight_mode", choices=["effect_size", "linear"], default="effect_size",
+                    help="Weighting strategy: effect_size (default) or linear (logistic/least squares)")
+    ap.add_argument("--use_sklearn", action="store_true", help="Use sklearn LogisticRegression if available (linear mode only)")
     args = ap.parse_args()
 
     # Label codes from WESAD readme: 1=baseline, 2=stress, 3=amusement, 4=meditation; others ignored.
@@ -170,19 +229,6 @@ def main():
     for sid in subjects:
         subj_dir = os.path.join(args.wesad_root, sid)
         pkl_path = os.path.join(subj_dir, f"{sid}.pkl")
-        e4_dir = os.path.join(subj_dir, f"{sid}_E4_Data")
-        if not os.path.isdir(e4_dir):
-            # some datasets name it "E4_Data" or "E4"
-            for alt in ("E4_Data", "E4"):
-                alt_path = os.path.join(subj_dir, alt)
-                if os.path.isdir(alt_path):
-                    e4_dir = alt_path
-                    break
-
-        if not os.path.isdir(e4_dir):
-            print(f"[skip] {sid}: missing E4 folder (tried {sid}_E4_Data / E4_Data / E4)")
-            continue
-
         if not os.path.exists(pkl_path):
             print(f"[skip] {sid}: missing {sid}.pkl for labels")
             continue
@@ -194,16 +240,33 @@ def main():
             continue
         labels = np.asarray(labels).astype(int)
 
-        _, temp_fs, temp = read_e4_signal_from_folder(e4_dir, "TEMP.csv")
-        _, hr_fs, hr = read_e4_signal_from_folder(e4_dir, "HR.csv")
-        _, acc_fs, acc = read_e4_signal_from_folder(e4_dir, "ACC.csv")
-        ibi = read_ibi_from_folder_if_exists(e4_dir)
+        signals = pkl_data.get("signal") or {}
+        wrist = signals.get("wrist") or {}
+        chest = signals.get("chest") or {}
+        temp = wrist.get("TEMP")
+        acc = wrist.get("ACC")
+        ecg = chest.get("ECG")
+        if temp is None or acc is None or ecg is None:
+            print(f"[skip] {sid}: missing wrist/chest signals in {sid}.pkl")
+            continue
+        temp = np.asarray(temp)
+        acc = np.asarray(acc)
+        ecg = np.asarray(ecg)
+        temp_fs = WRIST_FS_HZ["TEMP"]
+        acc_fs = WRIST_FS_HZ["ACC"]
+        ecg_fs = CHEST_FS_HZ["ECG"]
+
+        ecg_peaks = ecg_peaks_from_signal(ecg[:, 0] if ecg.ndim > 1 else ecg, ecg_fs)
+        ibi_times, ibi_values = ibi_from_peaks(ecg_peaks, ecg_fs)
+        if len(ibi_values) < 2:
+            print(f"[skip] {sid}: insufficient ECG peaks for HRV")
+            continue
 
         duration_s = min(
-            len(labels) / 700.0,
+            len(labels) / LABEL_FS_HZ,
             len(temp) / temp_fs,
-            len(hr) / hr_fs,
             len(acc) / acc_fs,
+            len(ecg) / ecg_fs,
         )
 
         t = 0.0
@@ -211,8 +274,8 @@ def main():
             t0, t1 = t, t + args.window_s
 
             # Window label = majority label in the interval
-            i0 = int(t0 * 700)
-            i1 = int(t1 * 700)
+            i0 = int(t0 * LABEL_FS_HZ)
+            i1 = int(t1 * LABEL_FS_HZ)
             lbl = labels[i0:i1]
             if len(lbl) == 0:
                 break
@@ -225,10 +288,9 @@ def main():
 
             feats = extract_features_for_window(
                 t0, t1,
-                temp_start=0.0, temp_fs=temp_fs, temp=temp,
-                hr_start=0.0, hr_fs=hr_fs, hr=hr,
-                acc_start=0.0, acc_fs=acc_fs, acc=acc,
-                ibi=ibi,
+                temp=temp, temp_fs=temp_fs,
+                acc=acc, acc_fs=acc_fs,
+                ibi_times=ibi_times, ibi_values=ibi_values,
             )
             if feats is None:
                 t += args.stride_s
@@ -236,8 +298,7 @@ def main():
 
             row = [feats.hr_mean_bpm, feats.hrv_sdnn_ms, feats.wrist_temp_c, feats.acc_rms_g]
             if not np.all(np.isfinite(row)):
-                # if IBI isn’t available, HR/SDNN may be NaN — you can either skip or impute.
-                # For v1: skip rows missing HRV/HR.
+                # Skip rows with invalid HR/HRV extraction.
                 t += args.stride_s
                 continue
 
@@ -270,30 +331,25 @@ def main():
         sd = priors[name]["std"]
         Xz[:, j] = (X[:, j] - mu) / (sd + 1e-6)
 
-    # Fit simple model: stress vs baseline
-    if SKLEARN_OK:
-        clf = LogisticRegression(penalty="l2", C=1.0, max_iter=2000)
-        clf.fit(Xz, y)
-        w = clf.coef_.reshape(-1)
-        b = float(clf.intercept_[0])
+    if args.weight_mode == "effect_size":
+        # Univariate effect size: stress minus baseline in baseline std units.
+        X_stress = X[y == 1]
+        w = np.zeros(X.shape[1], dtype=float)
+        for j, name in enumerate(feat_names):
+            mu_base = priors[name]["mean"]
+            sd_base = priors[name]["std"]
+            mu_stress = float(np.mean(X_stress[:, j])) if len(X_stress) else mu_base
+            w[j] = (mu_stress - mu_base) / (sd_base + 1e-6)
+        b = 0.0
     else:
-        # fallback: ridge-ish linear regression to y
-        lam = 1.0
-        XtX = Xz.T @ Xz + lam * np.eye(Xz.shape[1])
-        Xty = Xz.T @ y.astype(float)
-        w = np.linalg.solve(XtX, Xty)
-        b = float(np.mean(y) - np.mean(Xz, axis=0) @ w)
-
-    # Your Swift score is “higher is better”.
-    # Here y=1 means stress, so higher w·z => more stress => should LOWER the score.
-    # So we negate weights to make stress-associated directions reduce score.
-    w = -w
-
-    # Scale weights into a sane 0–100 range:
-    # Make typical |w·z| around 15 points.
-    proj = Xz @ w
-    scale = 15.0 / (np.std(proj) + 1e-6)
-    w_scaled = w * scale
+        # Fit simple model: stress vs baseline
+        if args.use_sklearn and SKLEARN_AVAILABLE:
+            clf = LogisticRegression(max_iter=10000)
+            clf.fit(Xz, y)
+            w = clf.coef_.reshape(-1)
+            b = float(clf.intercept_[0])
+        else:
+            w, b = fit_logistic_newton(Xz, y, l2=1.0)
 
     out = {
         "meta": {
@@ -301,10 +357,10 @@ def main():
             "labels": {"baseline": 1, "stress": 2},
             "window_s": args.window_s,
             "stride_s": args.stride_s,
-            "notes": "Means/stds computed on baseline windows. Weights trained to separate stress vs baseline, then negated so 'higher score = better'."
+            "notes": "Signals from WESAD .pkl wrist/chest data aligned to labels. HR/HRV estimated from chest ECG via FFT bandpass + peak detection. Weights use effect_size mode unless linear is selected."
         },
         "priors": priors,
-        "weights": {feat_names[j]: float(w_scaled[j]) for j in range(len(feat_names))},
+        "weights": {feat_names[j]: float(w[j]) for j in range(len(feat_names))},
         "bias": float(b)
     }
 
@@ -312,8 +368,6 @@ def main():
         json.dump(out, f, indent=2)
 
     print(f"\nWrote {args.out}")
-    print("Feature priors:", priors)
-    print("Weights:", out["weights"])
 
 
 if __name__ == "__main__":
