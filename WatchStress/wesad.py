@@ -13,7 +13,7 @@ except Exception:
     SKLEARN_AVAILABLE = False
 
 LABEL_FS_HZ = 700.0
-WRIST_FS_HZ = {"ACC": 32.0, "BVP": 64.0, "EDA": 4.0, "TEMP": 4.0}
+WRIST_FS_HZ = {"BVP": 64.0, "EDA": 4.0, "TEMP": 4.0}
 CHEST_FS_HZ = {"ECG": LABEL_FS_HZ}
 
 def bandpass_fft(x: np.ndarray, fs_hz: float, f_lo: float = 0.7, f_hi: float = 3.0) -> np.ndarray:
@@ -139,7 +139,6 @@ class WindowFeatures:
     hr_mean_bpm: float
     hrv_sdnn_ms: float
     wrist_temp_c: float
-    acc_rms_g: float
 
 
 def extract_features_for_window(
@@ -147,8 +146,6 @@ def extract_features_for_window(
     t1: float,
     temp: np.ndarray,
     temp_fs: float,
-    acc: np.ndarray,
-    acc_fs: float,
     ibi_times: np.ndarray,
     ibi_values: np.ndarray,
 ) -> Optional[WindowFeatures]:
@@ -162,17 +159,6 @@ def extract_features_for_window(
         return None
     temp_mean = float(np.mean(temp[temp_i0:temp_i1, 0]))
 
-    # ACC RMS magnitude
-    acc_i0 = int(max(0, np.floor(t0 * acc_fs)))
-    acc_i1 = int(min(len(acc), np.ceil(t1 * acc_fs)))
-    if acc_i1 - acc_i0 < max(10, int(0.25 * (t1 - t0) * acc_fs)):
-        return None
-    seg = acc[acc_i0:acc_i1, :]
-    # ACC is in "1/64g" in raw E4 files for WESAD; convert to g.
-    seg_g = seg / 64.0
-    mag = np.linalg.norm(seg_g, axis=1)
-    acc_rms = float(np.std(mag, ddof=1))
-
     # ECG peaks -> HR mean + SDNN
     hr_res = hr_hrv_from_ibi_window(ibi_times, ibi_values, t0, t1)
     if hr_res is None:
@@ -183,7 +169,6 @@ def extract_features_for_window(
         hr_mean_bpm=hr_mean,
         hrv_sdnn_ms=float(sdnn_ms),
         wrist_temp_c=temp_mean,
-        acc_rms_g=acc_rms,
     )
 
 
@@ -244,16 +229,13 @@ def main():
         wrist = signals.get("wrist") or {}
         chest = signals.get("chest") or {}
         temp = wrist.get("TEMP")
-        acc = wrist.get("ACC")
         ecg = chest.get("ECG")
-        if temp is None or acc is None or ecg is None:
+        if temp is None or ecg is None:
             print(f"[skip] {sid}: missing wrist/chest signals in {sid}.pkl")
             continue
         temp = np.asarray(temp)
-        acc = np.asarray(acc)
         ecg = np.asarray(ecg)
         temp_fs = WRIST_FS_HZ["TEMP"]
-        acc_fs = WRIST_FS_HZ["ACC"]
         ecg_fs = CHEST_FS_HZ["ECG"]
 
         ecg_peaks = ecg_peaks_from_signal(ecg[:, 0] if ecg.ndim > 1 else ecg, ecg_fs)
@@ -265,7 +247,6 @@ def main():
         duration_s = min(
             len(labels) / LABEL_FS_HZ,
             len(temp) / temp_fs,
-            len(acc) / acc_fs,
             len(ecg) / ecg_fs,
         )
 
@@ -289,14 +270,13 @@ def main():
             feats = extract_features_for_window(
                 t0, t1,
                 temp=temp, temp_fs=temp_fs,
-                acc=acc, acc_fs=acc_fs,
                 ibi_times=ibi_times, ibi_values=ibi_values,
             )
             if feats is None:
                 t += args.stride_s
                 continue
 
-            row = [feats.hr_mean_bpm, feats.hrv_sdnn_ms, feats.wrist_temp_c, feats.acc_rms_g]
+            row = [feats.hr_mean_bpm, feats.hrv_sdnn_ms, feats.wrist_temp_c]
             if not np.all(np.isfinite(row)):
                 # Skip rows with invalid HR/HRV extraction.
                 t += args.stride_s
@@ -315,7 +295,7 @@ def main():
     if len(X) < 50:
         raise SystemExit(f"Not enough samples extracted ({len(X)}). Check paths / zip contents.")
 
-    feat_names = ["hrMeanBPM", "hrvSDNNms", "wristTempC", "accRMSG"]
+    feat_names = ["hrMeanBPM", "hrvSDNNms", "wristTempC"]
 
     # Compute priors from BASELINE windows only (y==0)
     X_base = X[y == 0]

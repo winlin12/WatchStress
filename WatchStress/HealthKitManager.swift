@@ -122,6 +122,28 @@ final class HealthKitManager {
         healthStore.execute(query)
     }
 
+    /// Fetches quantity samples in a given time window.
+    func quantitySamples(for type: HKQuantityType, start: Date, end: Date) async -> [HKQuantitySample] {
+        await withCheckedContinuation { continuation in
+            let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+            let query = HKSampleQuery(sampleType: type, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, results, _ in
+                continuation.resume(returning: results as? [HKQuantitySample] ?? [])
+            }
+            healthStore.execute(query)
+        }
+    }
+
+    /// Fetches category samples in a given time window.
+    func categorySamples(for type: HKCategoryType, start: Date, end: Date) async -> [HKCategorySample] {
+        await withCheckedContinuation { continuation in
+            let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+            let query = HKSampleQuery(sampleType: type, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, results, _ in
+                continuation.resume(returning: results as? [HKCategorySample] ?? [])
+            }
+            healthStore.execute(query)
+        }
+    }
+
     /// Computes total sleep duration for last night (asleep segments only).
     /// The window is defined as yesterday 12:00 PM to today 12:00 PM to capture sleep crossing midnight.
     /// - Parameter completion: Invoked with the total TimeInterval spent asleep, or nil if unavailable.
@@ -177,4 +199,3 @@ final class HealthKitManager {
         healthStore.execute(query)
     }
 }
-

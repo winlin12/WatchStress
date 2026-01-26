@@ -28,6 +28,7 @@ final class VitalsViewModel: ObservableObject {
     @Published var bloodOxygen: String = "—"           // Most recent SpO₂ (%) — optional
 
     private let hk = HealthKitManager.shared
+    private let baselineRefreshKey = "ScoreEngine.lastBaselineRefreshDay"
 
     /// Requests HealthKit authorization and, if successful, loads all metrics.
     /// Safe to call multiple times; authorization is only requested once by the system.
@@ -56,6 +57,86 @@ final class VitalsViewModel: ObservableObject {
             group.addTask { await self.loadRespirationRate() }
             group.addTask { await self.loadBloodOxygen() }
         }
+        await refreshHistoricalBaselinesIfNeeded()
+    }
+
+    private struct StatsAccumulator {
+        var count: Int = 0
+        var mean: Double = 0
+        var m2: Double = 0
+
+        mutating func update(with x: Double) {
+            count += 1
+            let delta = x - mean
+            mean += delta / Double(count)
+            let delta2 = x - mean
+            m2 += delta * delta2
+        }
+
+        var stdDev: Double {
+            guard count > 1 else { return 0 }
+            return max(m2 / Double(count - 1), 0).squareRoot()
+        }
+    }
+
+    private func baselineStats(from samples: [HKQuantitySample], unit: HKUnit) -> ScoreEngine.BaselineStats? {
+        var acc = StatsAccumulator()
+        for sample in samples {
+            let value = sample.quantity.doubleValue(for: unit)
+            if value.isFinite {
+                acc.update(with: value)
+            }
+        }
+        guard acc.count >= 1 else { return nil }
+        return ScoreEngine.BaselineStats(count: acc.count, mean: acc.mean, stdDev: acc.stdDev)
+    }
+
+    private func refreshHistoricalBaselinesIfNeeded(daysBack: Int = 7) async {
+        guard authorized else { return }
+
+        let defaults = UserDefaults.standard
+        let cal = Calendar.current
+        let currentDay = Self.dayKey(for: Date(), calendar: cal)
+        if defaults.string(forKey: baselineRefreshKey) == currentDay {
+            return
+        }
+
+        guard let start = cal.date(byAdding: .day, value: -daysBack, to: Date()) else { return }
+        let end = Date()
+
+        var baselines: [ScoreEngine.Feature: ScoreEngine.BaselineStats] = [:]
+
+        // Use resting heart rate for baseline to avoid workout spikes.
+        if let hrType = HKObjectType.quantityType(forIdentifier: .restingHeartRate) {
+            let samples = await hk.quantitySamples(for: hrType, start: start, end: end)
+            if let stats = baselineStats(from: samples, unit: HKUnit.count().unitDivided(by: .minute())) {
+                baselines[.hrMeanBPM] = stats
+            }
+        }
+
+        if let hrvType = HKObjectType.quantityType(forIdentifier: .heartRateVariabilitySDNN) {
+            let samples = await hk.quantitySamples(for: hrvType, start: start, end: end)
+            if let stats = baselineStats(from: samples, unit: HKUnit.secondUnit(with: .milli)) {
+                baselines[.hrvSDNNms] = stats
+            }
+        }
+
+        var tempStats: ScoreEngine.BaselineStats?
+        if #available(iOS 16.0, *), let wristType = HKObjectType.quantityType(forIdentifier: .appleSleepingWristTemperature) {
+            let samples = await hk.quantitySamples(for: wristType, start: start, end: end)
+            tempStats = baselineStats(from: samples, unit: HKUnit.degreeCelsius())
+        }
+        if tempStats == nil, let bodyType = HKObjectType.quantityType(forIdentifier: .bodyTemperature) {
+            let samples = await hk.quantitySamples(for: bodyType, start: start, end: end)
+            tempStats = baselineStats(from: samples, unit: HKUnit.degreeCelsius())
+        }
+        if let tempStats {
+            baselines[.wristTempC] = tempStats
+        }
+
+        guard !baselines.isEmpty else { return }
+        ScoreEngine.storeUserBaselines(baselines)
+        defaults.set(currentDay, forKey: baselineRefreshKey)
     }
 
     /// Loads last night's total sleep duration and formats as "Xh Ym".
@@ -252,5 +333,13 @@ final class VitalsViewModel: ObservableObject {
                 }
             }
         }
+    }
+
+    private static func dayKey(for date: Date, calendar: Calendar) -> String {
+        let comps = calendar.dateComponents([.year, .month, .day], from: date)
+        let y = comps.year ?? 0
+        let m = comps.month ?? 0
+        let d = comps.day ?? 0
+        return "\(y)-\(m)-\(d)"
     }
 }
