@@ -1,0 +1,229 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="b9f87697-e230-471c-b45f-4f823f75033d" name="Changes" comment="Removed accelerometer-based features and tuned baseline functionality&#10;&#10;Refactored `wesad.py` to eliminate accelerometer-based features, updated health features in the ML pipeline, and optimized baseline aggregation logic in `VitalsViewModel`. Updated `ScoreEngine` for baseline blending and stress scoring. Minor debug improvements in iOS UI section.">
+      <change beforePath="$PROJECT_DIR$/WatchStress Watch App/Assets.xcassets/AccentColor.colorset/Contents.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/WatchStress Watch App/Assets.xcassets/AppIcon.appiconset/ChatGPT Image Jan 12, 2026, 01_29_34 PM.png" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/WatchStress Watch App/Assets.xcassets/AppIcon.appiconset/Contents.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/WatchStress Watch App/Assets.xcassets/Contents.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/WatchStress Watch App/WatchRootView.swift" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/WatchStress Watch App/WatchStress Watch App.entitlements" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/WatchStress Watch App/WatchStressApp.swift" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/WatchStress.xcodeproj/Info.plist" beforeDir="false" afterPath="$PROJECT_DIR$/WatchStress.xcodeproj/Info.plist" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/WatchStress.xcodeproj/project.pbxproj" beforeDir="false" afterPath="$PROJECT_DIR$/WatchStress.xcodeproj/project.pbxproj" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/WatchStress.xcodeproj/project.xcworkspace/xcuserdata/winstonlin.xcuserdatad/UserInterfaceState.xcuserstate" beforeDir="false" afterPath="$PROJECT_DIR$/WatchStress.xcodeproj/project.xcworkspace/xcuserdata/winstonlin.xcuserdatad/UserInterfaceState.xcuserstate" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/WatchStress/AIAssistantView.swift" beforeDir="false" afterPath="$PROJECT_DIR$/WatchStress/AIAssistantView.swift" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/WatchStress/HealthKitManager.swift" beforeDir="false" afterPath="$PROJECT_DIR$/WatchStress/HealthKitManager.swift" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/WatchStress/ScoreEngine.swift" beforeDir="false" afterPath="$PROJECT_DIR$/WatchStress/ScoreEngine.swift" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/WatchStress/SettingsView.swift" beforeDir="false" afterPath="$PROJECT_DIR$/WatchStress/SettingsView.swift" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/WatchStress/StressLogScore.swift" beforeDir="false" afterPath="$PROJECT_DIR$/WatchStress/StressLogScore.swift" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/WatchStress/StressRingView.swift" beforeDir="false" afterPath="$PROJECT_DIR$/WatchStress/StressRingView.swift" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/WatchStress/VitalsViewModel.swift" beforeDir="false" afterPath="$PROJECT_DIR$/WatchStress/VitalsViewModel.swift" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/WatchStress/WatchStressApp.swift" beforeDir="false" afterPath="$PROJECT_DIR$/WatchStress/WatchStressApp.swift" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/WatchStress/iOSRootView.swift" beforeDir="false" afterPath="$PROJECT_DIR$/WatchStress/iOSRootView.swift" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/WatchStress/info.plist" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/WatchStress/wesad.py" beforeDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="EmbeddingIndexingInfo">
+    <option name="cachedIndexableFilesCount" value="1656" />
+    <option name="fileBasedEmbeddingIndicesEnabled" value="true" />
+  </component>
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="Swift File" />
+      </list>
+    </option>
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;winlin12&quot;
+  }
+}</component>
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;https://github.com/winlin12/WatchStress.git&quot;,
+    &quot;accountId&quot;: &quot;bbbaeb4a-9d77-48ee-982d-deb0820c9269&quot;
+  }
+}</component>
+  <component name="McpProjectServerCommands">
+    <commands />
+    <urls />
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 1
+}</component>
+  <component name="ProjectId" id="38i839pCvibtjU0BGscjlnLK0jT" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;DefaultSwiftTemplate&quot;: &quot;Swift File&quot;,
+    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
+    &quot;Python.build_priors.executor&quot;: &quot;Run&quot;,
+    &quot;Python.family.executor&quot;: &quot;Run&quot;,
+    &quot;Python.wesad.executor&quot;: &quot;Run&quot;,
+    &quot;Python.wesad.py.executor&quot;: &quot;Run&quot;,
+    &quot;RunOnceActivity.MCP Project settings loaded&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
+    &quot;Swift Package Run.iphone with the ph.executor&quot;: &quot;Run&quot;,
+    &quot;ai.playground.ignore.import.keys.banner.in.settings&quot;: &quot;true&quot;,
+    &quot;com.intellij.ml.llm.matterhorn.ej.ui.settings.DefaultModelSelectionForGA.v1&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;main&quot;,
+    &quot;junie.onboarding.icon.badge.shown&quot;: &quot;true&quot;,
+    &quot;last_opened_file_path&quot;: &quot;/Users/winstonlin/Downloads/Schoolwork/Spring 2026/CS 592MUC/WatchStress/WatchStress&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;to.speed.mode.migration.done&quot;: &quot;true&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
+  }
+}</component>
+  <component name="RecapSpentCounter">
+    <option name="endsOfQuotaMs" value="1771606818909" />
+    <option name="spentUsd" value="0.29342172" />
+  </component>
+  <component name="RecapUselessUpdatesCounter">
+    <option name="suspendCountdown" value="0" />
+  </component>
+  <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$/WatchStress" />
+    </key>
+    <key name="MoveFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$/WatchStress" />
+      <recent name="$PROJECT_DIR$/WatchStress Watch App" />
+    </key>
+  </component>
+  <component name="RunManager" selected="Python.wesad">
+    <configuration name="family" type="PythonConfigurationType" factoryName="Python" nameIsGenerated="true">
+      <module name="WatchStress" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="SDK_NAME" value="watchstress" />
+      <option name="WORKING_DIRECTORY" value="" />
+      <option name="IS_MODULE_SDK" value="false" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
+      <option name="RUN_TOOL" value="" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/WatchStress/family.py" />
+      <option name="PARAMETERS" value="--family_path WatchStress/Assets.xcassets/family_data --out WatchStress/priors.json" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
+    <configuration name="wesad" type="PythonConfigurationType" factoryName="Python">
+      <module name="WatchStress" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="SDK_NAME" value="watchstress" />
+      <option name="WORKING_DIRECTORY" value="" />
+      <option name="IS_MODULE_SDK" value="false" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
+      <option name="RUN_TOOL" value="" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/WatchStress/wesad.py" />
+      <option name="PARAMETERS" value="--wesad_root WatchStress/Assets.xcassets/WESAD --out wesad_priors.json" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
+    <configuration default="true" type="SwiftRunPackage">
+      <toolchains>
+        <xcode />
+      </toolchains>
+      <method v="2" />
+    </configuration>
+    <configuration name="iphone with the ph" type="SwiftRunPackage" nameIsGenerated="true">
+      <toolchains>
+        <xcode />
+      </toolchains>
+      <method v="2" />
+    </configuration>
+    <list>
+      <item itemvalue="Python.family" />
+      <item itemvalue="Python.wesad" />
+      <item itemvalue="Swift Package Run.iphone with the ph" />
+    </list>
+  </component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-js-predefined-d6986cc7102b-9b0f141eb926-JavaScript-PY-253.31033.139" />
+        <option value="bundled-python-sdk-2653e85de345-6d6dccd035ac-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-253.31033.139" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="b9f87697-e230-471c-b45f-4f823f75033d" name="Changes" comment="" />
+      <created>1769270829056</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1769270829056</updated>
+      <workItem from="1769270830112" duration="294000" />
+      <workItem from="1769369338115" duration="51484000" />
+      <workItem from="1770578019437" duration="16034000" />
+      <workItem from="1772127606777" duration="6630000" />
+      <workItem from="1774008188370" duration="7000" />
+    </task>
+    <task id="LOCAL-00001" summary="Removed accelerometer-based features and tuned baseline functionality&#10;&#10;Refactored `wesad.py` to eliminate accelerometer-based features, updated health features in the ML pipeline, and optimized baseline aggregation logic in `VitalsViewModel`. Updated `ScoreEngine` for baseline blending and stress scoring. Minor debug improvements in iOS UI section.">
+      <option name="closed" value="true" />
+      <created>1769452041712</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1769452041712</updated>
+    </task>
+    <option name="localTasksCounter" value="2" />
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="Removed accelerometer-based features and tuned baseline functionality&#10;&#10;Refactored `wesad.py` to eliminate accelerometer-based features, updated health features in the ML pipeline, and optimized baseline aggregation logic in `VitalsViewModel`. Updated `ScoreEngine` for baseline blending and stress scoring. Minor debug improvements in iOS UI section." />
+    <option name="LAST_COMMIT_MESSAGE" value="Removed accelerometer-based features and tuned baseline functionality&#10;&#10;Refactored `wesad.py` to eliminate accelerometer-based features, updated health features in the ML pipeline, and optimized baseline aggregation logic in `VitalsViewModel`. Updated `ScoreEngine` for baseline blending and stress scoring. Minor debug improvements in iOS UI section." />
+  </component>
+  <component name="com.intellij.coverage.CoverageDataManagerImpl">
+    <SUITE FILE_PATH="coverage/WatchStress$wesad.coverage" NAME="wesad Coverage Results" MODIFIED="1770579823642" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="" />
+    <SUITE FILE_PATH="coverage/WatchStress$build_priors.coverage" NAME="family Coverage Results" MODIFIED="1770579696209" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="" />
+    <SUITE FILE_PATH="coverage/WatchStress$wesad_py.coverage" NAME="wesad Coverage Results" MODIFIED="1769376404954" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="" />
+  </component>
+</project>
