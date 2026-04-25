@@ -1,0 +1,85 @@
+{
+  "meta": {
+    "source": "K-EmoPhone (EMO)",
+    "split": {
+      "train": 50,
+      "val": 20,
+      "test": 7
+    },
+    "n_samples": {
+      "train": 2608,
+      "val": 1077,
+      "test": 377
+    },
+    "accuracy": {
+      "train": 0.6323,
+      "val": 0.6667,
+      "test": 0.6817
+    },
+    "window_min": 30,
+    "l2": 1.0,
+    "labels": {
+      "stressed": "ESM stress > 0",
+      "baseline": "ESM stress <= 0"
+    },
+    "features": [
+      "HR",
+      "HRV",
+      "skinTemperature",
+      "UltraViolet",
+      "stepCount",
+      "Calorie",
+      "Distance"
+    ],
+    "notes": "weights contains raw logistic regression coefficients (not rescaled). weights_display contains the same values linearly scaled to [-100, +100] for human-readable interpretation only. Score = sigmoid(b + sum(w_i * z_i)) * 100 where z_i = clip((x_i - mu_i)/sigma_i, -3, 3)."
+  },
+  "priors": {
+    "HR": {
+      "mean": 75.799037,
+      "std": 7.016697
+    },
+    "HRV": {
+      "mean": 69.574095,
+      "std": 11.529691
+    },
+    "skinTemperature": {
+      "mean": 32.475552,
+      "std": 1.656109
+    },
+    "UltraViolet": {
+      "mean": 0.025315,
+      "std": 0.090567
+    },
+    "stepCount": {
+      "mean": 313.647486,
+      "std": 560.849122
+    },
+    "Calorie": {
+      "mean": 31.801333,
+      "std": 112.468417
+    },
+    "Distance": {
+      "mean": 23986.717141,
+      "std": 43445.689561
+    }
+  },
+  "weights": {
+    "HR": 0.087538,
+    "HRV": -0.0072,
+    "skinTemperature": -0.077226,
+    "UltraViolet": -0.039601,
+    "stepCount": -0.059248,
+    "Calorie": 0.286589,
+    "Distance": -0.209167
+  },
+  "weights_display": {
+    "HR": 30.5449,
+    "HRV": -2.5124,
+    "skinTemperature": -26.9466,
+    "UltraViolet": -13.8181,
+    "stepCount": -20.6734,
+    "Calorie": 100.0,
+    "Distance": -72.9849
+  },
+  "bias": -0.573793
+}

@@ -330,15 +330,16 @@ final class VitalsViewModel: ObservableObject {
         }
     }
 
-    /// Loads today's UV exposure (J/m²).
+    /// Loads today's UV exposure index (discrete average).
     private func loadUVExposure() async {
         guard let type = HKObjectType.quantityType(forIdentifier: .uvExposure) else { return }
         await withCheckedContinuation { continuation in
-            hk.todaySum(for: type, options: .cumulativeSum) { [weak self] stats in
+            // uvExposure is a discrete type — must use .discreteAverage, not .cumulativeSum
+            hk.todaySum(for: type, options: .discreteAverage) { [weak self] stats in
                 Task { @MainActor in
-                    if let q = stats?.sumQuantity() {
-                        let val = q.doubleValue(for: HKUnit(from: "J/m^2"))
-                        self?.uvExposure = String(format: "%.1f J/m²", val)
+                    if let q = stats?.averageQuantity() {
+                        let val = q.doubleValue(for: HKUnit(from: "count/s"))
+                        self?.uvExposure = String(format: "%.2f", val)
                     } else { self?.uvExposure = "—" }
                     continuation.resume()
                 }
@@ -380,7 +381,8 @@ final class VitalsViewModel: ObservableObject {
         }
     }
 
-    /// Loads the most recent respiration rate (breaths per minute) — optional.    private func loadRespirationRate() async {
+    /// Loads the most recent respiration rate (breaths per minute) — optional.
+    private func loadRespirationRate() async {
         guard let type = HKObjectType.quantityType(forIdentifier: .respiratoryRate) else { return }
         await withCheckedContinuation { continuation in
             hk.mostRecentQuantitySample(for: type) { [weak self] sample in

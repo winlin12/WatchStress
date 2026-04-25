@@ -2,21 +2,40 @@
 //  ScoreEngine.swift
 //  WatchStress
 //
-//  Loads WESAD-derived priors/weights from priors.json and computes:
+//  score = sigmoid(b + Σ w_i · z_i) × 100
+//  where z_i = clip((x_i - μ_i) / σ_i, -3, +3)
 //
-//    z_i = clip((x_i - mu_i) / (sigma_i + eps), -3, +3)
-//    rawStress = b + sum(w_i * z_i)
-//    stressIndex = lambda * prev + (1 - lambda) * rawStress
-//    score = 80 - 80 * tanh(k * s)            for s >= 0
-//    score = 80 + 20 * (1 - exp(k * s))       for s < 0
-//
-//  Notes:
-//  - The weights in priors.json are stress-direction: positive means feature tends to
-//    increase under stress, so the tanh mapping lowers the score as stressIndex rises.
-//  - Baseline adapts from WESAD -> user by blending WESAD priors with user stats.
+//  Weights and priors are loaded from priors.json (Copy Bundle Resources).
+//  If the bundle resource is missing, the embedded fallback below is used.
 //
 
 import Foundation
+
+// MARK: - Embedded fallback priors (matches WatchStress/priors.json)
+// Re-run emo_train.py and update this string whenever the model is retrained.
+private let embeddedPriorsJSON = """
+{
+  "priors": {
+    "HR":              { "mean": 75.799037,    "std": 7.016697    },
+    "HRV":             { "mean": 69.574095,    "std": 11.529691   },
+    "skinTemperature": { "mean": 32.475552,    "std": 1.656109    },
+    "UltraViolet":     { "mean": 0.025315,     "std": 0.090567    },
+    "stepCount":       { "mean": 313.647486,   "std": 560.849122  },
+    "Calorie":         { "mean": 31.801333,    "std": 112.468417  },
+    "Distance":        { "mean": 23986.717141, "std": 43445.689561 }
+  },
+  "weights": {
+    "HR":              0.087509,
+    "HRV":            -0.007194,
+    "skinTemperature":-0.077186,
+    "UltraViolet":    -0.039582,
+    "stepCount":      -0.059210,
+    "Calorie":         0.286595,
+    "Distance":       -0.209232
+  },
+  "bias": -0.573793
+}
+"""
 
 final class ScoreEngine {
 
@@ -82,15 +101,15 @@ final class ScoreEngine {
     }
 
     struct ScoreResult {
+        /// Final stress probability mapped to 0–100. Higher = more stressed.
         let score: Double
-        let rawScore: Double
-        let rawStressIndex: Double
-        let stressIndex: Double
+        /// Raw linear output: b + Σ w_i · z_i
+        let linearOutput: Double
+        /// Number of features that contributed to this score
+        let featuresUsed: Int
         let confidence: Confidence
-        let k: Double
-        let lambda: Double
         let bias: Double
-        let drivers: [DriverContribution]   // sorted by absolute effect on score
+        let drivers: [DriverContribution]   // sorted by absolute contribution
     }
 
     struct BaselineStats {
@@ -124,43 +143,63 @@ final class ScoreEngine {
 
     private let eps: Double = 1e-6
     private let zClip: Double = 3.0
-    private let smoothingLambda: Double = 0.90
-
-    /// "How extreme the ring feels". Larger => bigger swings for the same stressIndex.
-    /// Tune this in-app without retraining.
-    private(set) var k: Double
-
-    /// Baseline adapts from WESAD priors -> user stats.
-    /// Blend factor: a = n / (n + k). Larger k = slower personalization.
-    private let baselineBlendK: Double = 30.0
-
-    /// Keep user std from collapsing too far below WESAD std (stability).
-    private let userStdFloorFracOfWesad: Double = 0.20
-
-    /// Require at least this many user samples for a feature before blending in std meaningfully.
-    private let minUserSamplesForStd: Int = 3
 
     // MARK: - State
 
     private let priorsFile: PriorsFile
-    private var lastStressIndex: Double?
+
+    // MARK: - Hardcoded fallback (updated by emo_train.py)
+
+    /// Pure-Swift fallback — no JSON parsing, never fails.
+    static let hardcodedPriorsFile: PriorsFile = {
+        let P = PriorsFile.Prior.self
+        return PriorsFile(
+            meta: nil,
+            priors: [
+                "HR":              PriorsFile.Prior(mean: 75.799037,    std: 7.016697),
+                "HRV":             PriorsFile.Prior(mean: 69.574095,    std: 11.529691),
+                "skinTemperature": PriorsFile.Prior(mean: 32.475552,    std: 1.656109),
+                "UltraViolet":     PriorsFile.Prior(mean: 0.025315,     std: 0.090567),
+                "stepCount":       PriorsFile.Prior(mean: 313.647486,   std: 560.849122),
+                "Calorie":         PriorsFile.Prior(mean: 31.801333,    std: 112.468417),
+                "Distance":        PriorsFile.Prior(mean: 23986.717141, std: 43445.689561),
+            ],
+            weights: [
+                "HR":               0.087509,
+                "HRV":             -0.007194,
+                "skinTemperature": -0.077186,
+                "UltraViolet":     -0.039582,
+                "stepCount":       -0.059210,
+                "Calorie":          0.286595,
+                "Distance":        -0.209232,
+            ],
+            bias: -0.573793
+        )
+    }()
 
     // MARK: - Init
 
-    /// Load priors.json from app bundle (recommended).
-    /// Add priors.json to your Xcode target's "Copy Bundle Resources".
-    convenience init?(k: Double = 0.20, priorsResourceName: String = "priors") {
-        guard let url = Bundle.main.url(forResource: priorsResourceName, withExtension: "json"),
-              let data = try? Data(contentsOf: url),
-              let decoded = try? JSONDecoder().decode(PriorsFile.self, from: data)
-        else {
-            return nil
+    /// Load priors.json from app bundle; falls back to embedded JSON, then hardcoded values.
+    /// Never returns nil — a valid ScoreEngine is always created.
+    init(priorsResourceName: String = "priors") {
+        // 1. Try bundle resource
+        if let url = Bundle.main.url(forResource: priorsResourceName, withExtension: "json"),
+           let data = try? Data(contentsOf: url),
+           let decoded = try? JSONDecoder().decode(PriorsFile.self, from: data) {
+            priorsFile = decoded
+            return
         }
-        self.init(k: k, priorsFile: decoded)
+        // 2. Try embedded JSON string constant
+        if let data = embeddedPriorsJSON.data(using: .utf8),
+           let decoded = try? JSONDecoder().decode(PriorsFile.self, from: data) {
+            priorsFile = decoded
+            return
+        }
+        // 3. Absolute fallback: hardcoded Swift values — never fails
+        priorsFile = Self.hardcodedPriorsFile
     }
 
-    init(k: Double = 0.20, priorsFile: PriorsFile) {
-        self.k = k
+    init(priorsFile: PriorsFile) {
         self.priorsFile = priorsFile
     }
 
@@ -173,93 +212,38 @@ final class ScoreEngine {
         return (feats, ws, priorsFile.bias)
     }
 
-    /// Compute score without mutating user baselines.
+    /// Compute score:
+    ///   1. z_i = clip((x_i - μ_i) / σ_i, -3, +3)
+    ///   2. linear = b + Σ w_i · z_i          (Wx + b)
+    ///   3. score  = sigmoid(linear) × 100     (0 = calm, 100 = stressed)
     func computeScore(sample: FeatureSample) -> ScoreResult {
-        let userStats = Self.loadAllUserStats()
         let bias = priorsFile.bias
-
-        // Build stress index from available features
-        var stressIndex = bias
-        var contributions: [DriverContribution] = []
-        var rawContributions: [(feature: Feature, weight: Double, z: Double, value: Double, mean: Double, std: Double, blendA: Double, stressContribution: Double)] = []
-        var blendAlphas: [Double] = []
+        var linear = bias
+        var rawContributions: [(feature: Feature, weight: Double, z: Double, value: Double, mean: Double, std: Double)] = []
 
         for f in Feature.allCases {
             guard let x = sample.value(for: f) else { continue }
             guard let w = priorsFile.weights[f.rawValue] else { continue }
             guard let prior = priorsFile.priors[f.rawValue] else { continue }
 
-            let st = userStats[f]  // may be nil
-            let (mu, sd, blendA) = blendedBaseline(prior: prior, user: st)
-            blendAlphas.append(blendA)
-
-            let zRaw = (x - mu) / (sd + eps)
+            let zRaw = (x - prior.mean) / (prior.std + eps)
             let z = clamp(zRaw, lo: -zClip, hi: zClip)
-            stressIndex += w * z
+            linear += w * z
 
-            rawContributions.append(
-                (
-                    feature: f,
-                    weight: w,
-                    z: z,
-                    value: x,
-                    mean: mu,
-                    std: sd,
-                    blendA: blendA,
-                    stressContribution: w * z
-                )
-            )
+            rawContributions.append((feature: f, weight: w, z: z, value: x, mean: prior.mean, std: prior.std))
         }
 
-        // If no usable features, baseline score with low confidence.
-        if rawContributions.isEmpty {
-            let fallbackScore = scoreFromStressIndex(bias)
-            return ScoreResult(
-                score: fallbackScore,
-                rawScore: fallbackScore,
-                rawStressIndex: bias,
-                stressIndex: bias,
-                confidence: .low,
-                k: k,
-                lambda: smoothingLambda,
-                bias: bias,
-                drivers: []
-            )
-        }
+        // sigmoid(linear) × 100
+        let score = sigmoid(linear) * 100.0
 
-        let rawStressIndex = stressIndex
-        let previousStressIndex = lastStressIndex
-        let smoothedStressIndex: Double
-        if let previousStressIndex {
-            smoothedStressIndex = (smoothingLambda * previousStressIndex) + ((1.0 - smoothingLambda) * rawStressIndex)
-        } else {
-            smoothedStressIndex = rawStressIndex
-        }
-        lastStressIndex = smoothedStressIndex
-
-        // Map to 0-100 ring score using tanh
-        let raw = scoreFromStressIndex(smoothedStressIndex)
-        let score = clamp(raw, lo: 0.0, hi: 100.0)
-
-        // Confidence heuristic
-        let avgBlend = blendAlphas.isEmpty ? 0.0 : (blendAlphas.reduce(0.0, +) / Double(blendAlphas.count))
+        // Confidence: based on how many features contributed
         let used = rawContributions.count
+        let conf: Confidence = used >= 5 ? .high : used >= 3 ? .medium : .low
 
-        var conf: Confidence = .low
-        if used >= 2 { conf = .medium }
-        if used >= 3 { conf = .high }
-        if avgBlend >= 0.50 && used >= 2 { conf = .high } // personalized + enough signals
-        if rawContributions.contains(where: { abs($0.z) >= zClip }) { conf = .low } // clipped => less trust
-
-        contributions = rawContributions.map { item in
-            let withoutRaw = rawStressIndex - item.stressContribution
-            let withoutSmoothed: Double
-            if let previousStressIndex {
-                withoutSmoothed = (smoothingLambda * previousStressIndex) + ((1.0 - smoothingLambda) * withoutRaw)
-            } else {
-                withoutSmoothed = withoutRaw
-            }
-            let delta = scoreFromStressIndex(smoothedStressIndex) - scoreFromStressIndex(withoutSmoothed)
+        // Per-feature score delta: score(linear) - score(linear - w_i·z_i)
+        let drivers: [DriverContribution] = rawContributions.map { item in
+            let linearWithout = linear - item.weight * item.z
+            let delta = score - sigmoid(linearWithout) * 100.0
             return DriverContribution(
                 feature: item.feature,
                 weight: item.weight,
@@ -268,20 +252,17 @@ final class ScoreEngine {
                 value: item.value,
                 mean: item.mean,
                 std: item.std,
-                blendA: item.blendA
+                blendA: 0.0
             )
-        }
-        let sortedDrivers = contributions.sorted { abs($0.scoreDelta) > abs($1.scoreDelta) }
+        }.sorted { abs($0.scoreDelta) > abs($1.scoreDelta) }
+
         return ScoreResult(
             score: score,
-            rawScore: raw,
-            rawStressIndex: rawStressIndex,
-            stressIndex: smoothedStressIndex,
+            linearOutput: linear,
+            featuresUsed: used,
             confidence: conf,
-            k: k,
-            lambda: smoothingLambda,
             bias: bias,
-            drivers: sortedDrivers
+            drivers: drivers
         )
     }
 
@@ -308,35 +289,7 @@ final class ScoreEngine {
         defaults.set(currentDay, forKey: lastKey)
     }
 
-    /// Optional: adjust ring "extremeness" on the fly.
-    func setK(_ newK: Double) {
-        k = max(0.0, newK)
-    }
 
-    // MARK: - Baseline blending (WESAD -> user)
-
-    private func blendedBaseline(prior: PriorsFile.Prior, user: RunningStats?) -> (mean: Double, std: Double, blendA: Double) {
-        guard let user = user, user.count >= 1 else {
-            return (prior.mean, max(prior.std, eps), 0.0)
-        }
-
-        // Blend factor goes from 0 -> 1 as n grows
-        let n = Double(user.count)
-        let a = n / (n + baselineBlendK)
-
-        // Mean blends immediately
-        let mu = (1.0 - a) * prior.mean + a * user.mean
-
-        // Std: only reliable after a few samples; also floor it for stability
-        let userStdRaw = user.stdDev
-        let userStdFloor = max(prior.std * userStdFloorFracOfWesad, eps)
-        let userStd = (user.count >= minUserSamplesForStd) ? max(userStdRaw, userStdFloor) : prior.std
-
-        let sd = (1.0 - a) * prior.std + a * userStd
-        return (mu, max(sd, eps), a)
-    }
-
-    // MARK: - Parsing helpers (optional)
 
     /// Convenience constructor if you're pulling numbers directly (bypass string parsing).
     static func sample(
@@ -386,36 +339,22 @@ final class ScoreEngine {
         var count: Int = 0
         var mean: Double = 0
         var m2: Double = 0
-
         init() {}
-
-        init(count: Int, mean: Double, stdDev: Double) {
-            self.count = max(0, count)
-            self.mean = mean
-            if count > 1 {
-                let variance = max(0.0, stdDev * stdDev)
-                self.m2 = variance * Double(count - 1)
-            } else {
-                self.m2 = 0
-            }
-        }
-
         mutating func update(with x: Double) {
             count += 1
             let delta = x - mean
             mean += delta / Double(count)
-            let delta2 = x - mean
-            m2 += delta * delta2
+            m2 += delta * (x - mean)
         }
-
-        var variance: Double { count > 1 ? m2 / Double(count - 1) : 0 }
-        var stdDev: Double { max(variance, 0).squareRoot() }
     }
 
     static func storeUserBaselines(_ baselines: [Feature: BaselineStats]) {
         var stats = loadAllUserStats()
         for (feature, baseline) in baselines {
-            stats[feature] = RunningStats(count: baseline.count, mean: baseline.mean, stdDev: baseline.stdDev)
+            var st = RunningStats()
+            st.count = baseline.count
+            st.mean  = baseline.mean
+            stats[feature] = st
         }
         saveAllUserStats(stats)
     }
@@ -424,12 +363,9 @@ final class ScoreEngine {
 
     private static func loadAllUserStats() -> [Feature: RunningStats] {
         var result: [Feature: RunningStats] = [:]
-        let defaults = UserDefaults.standard
         let decoder = JSONDecoder()
-
         for f in Feature.allCases {
-            let k = key(for: f)
-            if let data = defaults.data(forKey: k),
+            if let data = UserDefaults.standard.data(forKey: key(for: f)),
                let st = try? decoder.decode(RunningStats.self, from: data) {
                 result[f] = st
             }
@@ -438,36 +374,26 @@ final class ScoreEngine {
     }
 
     private static func saveAllUserStats(_ stats: [Feature: RunningStats]) {
-        let defaults = UserDefaults.standard
         let encoder = JSONEncoder()
-
         for (f, st) in stats {
-            let k = key(for: f)
             if let data = try? encoder.encode(st) {
-                defaults.set(data, forKey: k)
+                UserDefaults.standard.set(data, forKey: key(for: f))
             }
         }
     }
 
     private static func dayKey(for date: Date, calendar: Calendar) -> String {
-        let comps = calendar.dateComponents([.year, .month, .day], from: date)
-        let y = comps.year ?? 0
-        let m = comps.month ?? 0
-        let d = comps.day ?? 0
-        return "\(y)-\(m)-\(d)"
+        let c = calendar.dateComponents([.year, .month, .day], from: date)
+        return "\(c.year ?? 0)-\(c.month ?? 0)-\(c.day ?? 0)"
     }
 
     // MARK: - Utilities
 
-    private func scoreFromStressIndex(_ stressIndex: Double) -> Double {
-        let base = 80.0
-        if stressIndex >= 0.0 {
-            return base - base * tanh(k * stressIndex)
-        }
-        return base + (100.0 - base) * (1.0 - exp(k * stressIndex))
+    private func sigmoid(_ x: Double) -> Double {
+        1.0 / (1.0 + exp(-min(max(x, -50), 50)))
     }
 
     private func clamp(_ x: Double, lo: Double, hi: Double) -> Double {
-        return min(hi, max(lo, x))
+        min(hi, max(lo, x))
     }
 }

@@ -22,13 +22,13 @@ Split:  first 50 subjects → train
         next  20 subjects → validation
         last  10 subjects → test  (held-out, not used during training)
 
-Weights are fit with logistic regression (Newton-Raphson, no external deps) and
-then scaled to the range [0, 100] so they are interpretable in-app.
-Positive weights indicate the feature rises under stress.
+Training uses PyTorch logistic regression with CUDA if a GPU is available
+(e.g. NVIDIA 5070 Ti), otherwise falls back to CPU.
 
 Usage:
     python emo_train.py --emo_root ./emo --out priors.json
     python emo_train.py --emo_root ./emo --window_min 30 --out priors.json
+    python emo_train.py --emo_root ./emo --epochs 500 --lr 0.05 --out priors.json
 """
 
 import argparse
@@ -39,6 +39,19 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PyTorch import (optional — falls back to NumPy Newton-Raphson)
+# ─────────────────────────────────────────────────────────────────────────────
+
+try:
+    import torch
+    import torch.nn as nn
+    import torch.optim as optim
+    _TORCH_AVAILABLE = True
+except ImportError:
+    _TORCH_AVAILABLE = False
+    print("[warn] PyTorch not found — using NumPy Newton-Raphson fallback.", file=sys.stderr)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants
@@ -214,7 +227,7 @@ def sigmoid(z: np.ndarray) -> np.ndarray:
     return 1.0 / (1.0 + np.exp(-np.clip(z, -50.0, 50.0)))
 
 
-def fit_logistic(
+def fit_logistic_numpy(
     X: np.ndarray,
     y: np.ndarray,
     l2: float = 1.0,
@@ -245,6 +258,89 @@ def fit_logistic(
         if np.linalg.norm(dw) < tol and abs(db) < tol:
             break
     return w, b
+
+
+def fit_logistic_torch(
+    X: np.ndarray,
+    y: np.ndarray,
+    l2: float = 1.0,
+    epochs: int = 2000,
+    lr: float = 0.05,
+    batch_size: int = 512,
+    device: Optional[str] = None,
+) -> Tuple[np.ndarray, float]:
+    """
+    Fit logistic regression via mini-batch SGD (Adam) on GPU/CPU using PyTorch.
+    Falls back to CPU if CUDA is not available.
+    Returns (weights, bias) as numpy arrays.
+    """
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"  [torch] Training on device: {device}")
+    if device == "cuda":
+        print(f"  [torch] GPU: {torch.cuda.get_device_name(0)}")
+
+    dev = torch.device(device)
+    Xt = torch.tensor(X, dtype=torch.float32, device=dev)
+    yt = torch.tensor(y, dtype=torch.float32, device=dev)
+
+    n, d = X.shape
+    model = nn.Linear(d, 1, bias=True).to(dev)
+    nn.init.zeros_(model.weight)
+    nn.init.zeros_(model.bias)
+
+    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=l2 / n)
+    bce = nn.BCEWithLogitsLoss()
+
+    dataset = torch.utils.data.TensorDataset(Xt, yt)
+    loader  = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+    best_loss = float("inf")
+    patience, patience_cnt = 30, 0
+
+    for epoch in range(epochs):
+        model.train()
+        epoch_loss = 0.0
+        for xb, yb in loader:
+            optimizer.zero_grad()
+            logits = model(xb).squeeze(1)
+            loss = bce(logits, yb)
+            loss.backward()
+            optimizer.step()
+            epoch_loss += loss.item() * len(xb)
+        epoch_loss /= n
+
+        if epoch_loss < best_loss - 1e-6:
+            best_loss = epoch_loss
+            patience_cnt = 0
+        else:
+            patience_cnt += 1
+            if patience_cnt >= patience:
+                print(f"  [torch] Early stop at epoch {epoch+1}  loss={epoch_loss:.5f}")
+                break
+
+        if (epoch + 1) % 200 == 0:
+            print(f"  [torch] epoch {epoch+1:4d}  loss={epoch_loss:.5f}")
+
+    w_np = model.weight.detach().cpu().numpy().flatten()
+    b_np = float(model.bias.detach().cpu().item())
+    return w_np, b_np
+
+
+def fit_logistic(
+    X: np.ndarray,
+    y: np.ndarray,
+    l2: float = 1.0,
+    use_gpu: bool = True,
+    epochs: int = 2000,
+    lr: float = 0.05,
+) -> Tuple[np.ndarray, float]:
+    """
+    Dispatch to PyTorch GPU trainer if available, else NumPy Newton-Raphson.
+    """
+    if _TORCH_AVAILABLE and use_gpu:
+        return fit_logistic_torch(X, y, l2=l2, epochs=epochs, lr=lr)
+    return fit_logistic_numpy(X, y, l2=l2)
 
 
 def accuracy(X: np.ndarray, y: np.ndarray, w: np.ndarray, b: float) -> float:
@@ -307,7 +403,20 @@ def main() -> None:
     ap.add_argument("--n_train", type=int, default=50)
     ap.add_argument("--n_val",   type=int, default=20)
     ap.add_argument("--n_test",  type=int, default=10)
+    ap.add_argument("--no_gpu",  action="store_true",
+                    help="Disable GPU even if CUDA is available (force NumPy path)")
+    ap.add_argument("--epochs",  type=int, default=2000,
+                    help="Training epochs for PyTorch trainer (default: 2000)")
+    ap.add_argument("--lr",      type=float, default=0.05,
+                    help="Learning rate for Adam optimiser (default: 0.05)")
     args = ap.parse_args()
+
+    # ── GPU check ─────────────────────────────────────────────────────────
+    if _TORCH_AVAILABLE and not args.no_gpu:
+        if torch.cuda.is_available():
+            print(f"[GPU] CUDA available — {torch.cuda.get_device_name(0)}")
+        else:
+            print("[GPU] CUDA not available — falling back to NumPy Newton-Raphson.")
 
     emo_root   = args.emo_root
     window_ms  = int(args.window_min * 60 * 1000)
@@ -400,8 +509,13 @@ def main() -> None:
     Xz_test  = standardise(X_test)
 
     # ── Fit logistic regression ───────────────────────────────────────────
-    print("\nFitting logistic regression …")
-    w_raw, b_raw = fit_logistic(Xz_train, y_train, l2=args.l2)
+    use_gpu = not args.no_gpu
+    if _TORCH_AVAILABLE and use_gpu:
+        print(f"\nFitting logistic regression (PyTorch, epochs={args.epochs}, lr={args.lr}) …")
+    else:
+        print("\nFitting logistic regression (NumPy Newton-Raphson) …")
+    w_raw, b_raw = fit_logistic(Xz_train, y_train, l2=args.l2, use_gpu=use_gpu,
+                                epochs=args.epochs, lr=args.lr)
 
     acc_train = accuracy(Xz_train, y_train, w_raw, b_raw)
     acc_val   = accuracy(Xz_val,   y_val,   w_raw, b_raw) if len(X_val) > 0 else float("nan")
@@ -439,21 +553,23 @@ def main() -> None:
             },
             "window_min": args.window_min,
             "l2": args.l2,
-            "weight_scale": "0-100 (linear, sign-preserving, max|w|=100)",
             "labels": {
                 "stressed": "ESM stress > 0",
                 "baseline": "ESM stress <= 0",
             },
             "features": FEATURE_NAMES,
             "notes": (
-                "Weights represent direction and strength of each feature's "
-                "association with self-reported stress. Positive = feature "
-                "rises under stress; negative = feature falls under stress. "
-                "Magnitude 0-100 indicates relative importance."
+                "weights contains raw logistic regression coefficients (not rescaled). "
+                "weights_display contains the same values linearly scaled to [-100, +100] "
+                "for human-readable interpretation only. "
+                "Score = sigmoid(b + sum(w_i * z_i)) * 100 where z_i = clip((x_i - mu_i)/sigma_i, -3, 3)."
             ),
         },
         "priors": priors,
-        "weights": {name: round(float(w_scaled[j]), 4) for j, name in enumerate(FEATURE_NAMES)},
+        # Raw logistic coefficients — used by ScoreEngine for Wx+b
+        "weights": {name: round(float(w_raw[j]), 6) for j, name in enumerate(FEATURE_NAMES)},
+        # Display-only scaled version (max|w|=100) — for UI labels
+        "weights_display": {name: round(float(w_scaled[j]), 4) for j, name in enumerate(FEATURE_NAMES)},
         "bias": round(float(b_raw), 6),
     }
 

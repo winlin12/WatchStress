@@ -42,8 +42,8 @@ struct iOSRootView: View {
     @AppStorage("logScheduleSkipSleep") private var logScheduleSkipSleep: Bool = true
     @AppStorage("logScheduleSkipExercise") private var logScheduleSkipExercise: Bool = true
 
-    // Scoring engine and state
-    private let scoreEngine: ScoreEngine? = ScoreEngine()
+    // Scoring engine and state — always non-nil, uses hardcoded fallback if needed
+    private let scoreEngine: ScoreEngine = ScoreEngine()
     @State private var scoreDetails: ScoreEngine.ScoreResult? = nil
 
     var body: some View {
@@ -123,6 +123,12 @@ struct iOSRootView: View {
             // Ensure vitals authorization and initial load even if the sheet isn't opened
             if !vitals.authorized {
                 vitals.requestAuthorizationAndLoad()
+                // Trigger a score from history once authorization completes
+                Task {
+                    // Wait briefly for authorization + initial HealthKit load
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    await MainActor.run { triggerScoreUpdate() }
+                }
             } else {
                 // If already authorized, reload and then compute
                 Task {
@@ -242,28 +248,21 @@ private struct ScoreDetailsView: View {
                     VStack(spacing: 14) {
                         GroupBox("Summary") {
                             VStack(alignment: .leading, spacing: 8) {
-                                SummaryRow(label: "Score (clamped)", value: format(result.score, decimals: 1))
-                                SummaryRow(label: "Raw score", value: format(result.rawScore, decimals: 2))
-                                SummaryRow(label: "Stress index (raw)", value: format(result.rawStressIndex, decimals: 3))
-                                SummaryRow(label: "Stress index (smoothed)", value: format(result.stressIndex, decimals: 3))
+                                SummaryRow(label: "Score", value: format(result.score, decimals: 1))
+                                SummaryRow(label: "Linear output (Wx+b)", value: format(result.linearOutput, decimals: 3))
+                                SummaryRow(label: "Features used", value: "\(result.featuresUsed)")
                                 SummaryRow(label: "Confidence", value: result.confidence.rawValue)
-                                SummaryRow(label: "k", value: format(result.k, decimals: 2))
-                                SummaryRow(label: "Lambda", value: format(result.lambda, decimals: 2))
                                 SummaryRow(label: "Bias", value: format(result.bias, decimals: 3))
                             }
                         }
 
                         GroupBox("Formula") {
                             VStack(alignment: .leading, spacing: 6) {
-                                Text("z = clip((x - mu) / (sigma + 1e-6), -3, +3)")
-                                Text("rawStress = bias + sum(w * z)")
-                                Text("stressIndex = lambda * prev + (1 - lambda) * rawStress")
-                                Text("s = stressIndex")
-                                Text("score = 80 - 80 * tanh(k * s)        for s >= 0")
-                                Text("score = 80 + 20 * (1 - exp(k * s))     for s < 0")
-                                Text("sum(w * z) = \(format(sumContribution(for: result), decimals: 3))")
-                                Text("rawStress = \(format(result.rawStressIndex, decimals: 3))")
-                                Text("score(s) = \(format(result.rawScore, decimals: 2))\(isClamped(result) ? " (clamped)" : "")")
+                                Text("z_i = clip((x_i - μ_i) / σ_i, -3, +3)")
+                                Text("linear = b + Σ w_i · z_i")
+                                Text("score  = sigmoid(linear) × 100")
+                                Text("linear = \(format(result.linearOutput, decimals: 3))")
+                                Text("score  = \(format(result.score, decimals: 1))")
                             }
                             .font(.subheadline.monospaced())
                         }
@@ -328,26 +327,34 @@ private struct ScoreDetailsView: View {
     }
 
     private func sumContribution(for result: ScoreEngine.ScoreResult) -> Double {
-        result.rawStressIndex - result.bias
+        result.linearOutput - result.bias
     }
 
     private func isClamped(_ result: ScoreEngine.ScoreResult) -> Bool {
-        abs(result.rawScore - result.score) > 0.001
+        false // score is now unbounded sigmoid × 100, never clamped
     }
 
     private func featureName(for feature: ScoreEngine.Feature) -> String {
         switch feature {
-        case .hrMeanBPM: return "Heart Rate"
-        case .hrvSDNNms: return "HRV (SDNN)"
-        case .wristTempC: return "Wrist Temperature"
+        case .HR:              return "Heart Rate"
+        case .HRV:             return "HRV (SDNN)"
+        case .skinTemperature: return "Skin Temperature"
+        case .UltraViolet:     return "UV Exposure"
+        case .stepCount:       return "Step Count"
+        case .Calorie:         return "Active Calories"
+        case .Distance:        return "Distance"
         }
     }
 
     private func featureUnit(for feature: ScoreEngine.Feature) -> String {
         switch feature {
-        case .hrMeanBPM: return "bpm"
-        case .hrvSDNNms: return "ms"
-        case .wristTempC: return "C"
+        case .HR:              return "bpm"
+        case .HRV:             return "ms"
+        case .skinTemperature: return "°C"
+        case .UltraViolet:     return "idx"
+        case .stepCount:       return "steps"
+        case .Calorie:         return "kcal"
+        case .Distance:        return "m"
         }
     }
 
@@ -449,6 +456,9 @@ private struct VitalsSheetView: View {
                     MetricCard(title: "Blood Oxygen", value: vm.bloodOxygen)
                     MetricCard(title: "Steps (today)", value: vm.steps)
                     MetricCard(title: "Exercise Minutes", value: vm.exerciseMinutes)
+                    MetricCard(title: "Active Calories", value: vm.activeCalories)
+                    MetricCard(title: "Distance (today)", value: vm.distance)
+                    MetricCard(title: "UV Exposure", value: vm.uvExposure)
                 }
                 .padding(.horizontal)
                 .padding(.top)
@@ -490,6 +500,9 @@ extension iOSRootView {
         let exerciseMinutes: String
         let respirationRate: String
         let bloodOxygen: String
+        let activeCalories: String
+        let distance: String
+        let uvExposure: String
     }
 
     private var vitalsSnapshot: VitalsSnapshot {
@@ -503,7 +516,10 @@ extension iOSRootView {
             steps: vitals.steps,
             exerciseMinutes: vitals.exerciseMinutes,
             respirationRate: vitals.respirationRate,
-            bloodOxygen: vitals.bloodOxygen
+            bloodOxygen: vitals.bloodOxygen,
+            activeCalories: vitals.activeCalories,
+            distance: vitals.distance,
+            uvExposure: vitals.uvExposure
         )
     }
 
@@ -550,44 +566,129 @@ extension iOSRootView {
     }
 
     /// Builds a FeatureSample from current vitals and updates the computed score using ScoreEngine.
+    /// If live HealthKit strings are still "—" (e.g. on first launch), falls back to querying
+    /// the last 24 h of HealthKit data directly so a score is always computed.
     @MainActor private func computeScoreFromVitals(animate: Bool) {
-        let sample: ScoreEngine.FeatureSample
         if useDebugOverrides {
-            sample = ScoreEngine.sample(
-                hrMeanBPM: debugHeartRate,
-                hrvSDNNms: debugHRV,
-                wristTempC: debugWristTemp
+            let sample = ScoreEngine.sample(
+                HR: debugHeartRate,
+                HRV: debugHRV,
+                skinTemperature: debugWristTemp
             )
-        } else {
-            sample = ScoreEngine.sampleFromFormattedStrings(
-                heartRate: vitals.heartRate,
-                hrvSDNN: vitals.hrvSDNN,
-                wristTemperature: vitals.wristTemperature
-            )
-        }
-        guard let scoreEngine else {
-            scoreDetails = nil
+            applyScore(sample: sample, animate: animate)
             return
         }
+
+        // Helper: extract the leading number from a formatted string like "72 bpm"
+        func num(_ s: String) -> Double? { Double(s.filter { "0123456789.".contains($0) }) }
+
+        let hrVal    = num(vitals.heartRate)
+        let hrvVal   = num(vitals.hrvSDNN)
+        let tempVal  = num(vitals.wristTemperature)
+        let stepsVal = num(vitals.steps)
+        let calVal   = num(vitals.activeCalories)
+        let distVal  = num(vitals.distance)
+
+        // If we have at least HR, build sample immediately
+        if hrVal != nil {
+            let sample = ScoreEngine.sample(
+                HR: hrVal, HRV: hrvVal, skinTemperature: tempVal,
+                stepCount: stepsVal, Calorie: calVal, Distance: distVal
+            )
+            applyScore(sample: sample, animate: animate)
+            return
+        }
+
+        // No live data yet — query HealthKit history (last 24 h) asynchronously
+        Task { @MainActor in
+            let hk = HealthKitManager.shared
+            let end = Date()
+            let start = end.addingTimeInterval(-86400)   // 24 h ago
+
+            // HR: average of recent samples
+            var historicHR: Double?
+            if let hrType = HKObjectType.quantityType(forIdentifier: .heartRate) {
+                let samples = await hk.quantitySamples(for: hrType, start: start, end: end)
+                let vals = samples.map { $0.quantity.doubleValue(for: HKUnit.count().unitDivided(by: .minute())) }
+                if !vals.isEmpty { historicHR = vals.reduce(0, +) / Double(vals.count) }
+            }
+            // Fall back to resting HR if no active HR
+            if historicHR == nil, let rrType = HKObjectType.quantityType(forIdentifier: .restingHeartRate) {
+                let samples = await hk.quantitySamples(for: rrType, start: start, end: end)
+                if let last = samples.last {
+                    historicHR = last.quantity.doubleValue(for: HKUnit.count().unitDivided(by: .minute()))
+                }
+            }
+
+            // HRV
+            var historicHRV: Double?
+            if let hrvType = HKObjectType.quantityType(forIdentifier: .heartRateVariabilitySDNN) {
+                let samples = await hk.quantitySamples(for: hrvType, start: start, end: end)
+                if let last = samples.last {
+                    historicHRV = last.quantity.doubleValue(for: HKUnit.secondUnit(with: .milli))
+                }
+            }
+
+            // Skin temperature
+            var historicTemp: Double?
+            if #available(iOS 16.0, *), let wType = HKObjectType.quantityType(forIdentifier: .appleSleepingWristTemperature) {
+                let samples = await hk.quantitySamples(for: wType, start: start, end: end)
+                if let last = samples.last {
+                    historicTemp = last.quantity.doubleValue(for: HKUnit.degreeCelsius())
+                }
+            }
+            if historicTemp == nil, let bType = HKObjectType.quantityType(forIdentifier: .bodyTemperature) {
+                let samples = await hk.quantitySamples(for: bType, start: start, end: end)
+                if let last = samples.last {
+                    historicTemp = last.quantity.doubleValue(for: HKUnit.degreeCelsius())
+                }
+            }
+
+            // Steps (sum over window)
+            var historicSteps: Double?
+            if let sType = HKObjectType.quantityType(forIdentifier: .stepCount) {
+                let samples = await hk.quantitySamples(for: sType, start: start, end: end)
+                let total = samples.reduce(0.0) { $0 + $1.quantity.doubleValue(for: HKUnit.count()) }
+                if total > 0 { historicSteps = total }
+            }
+
+            // Calories (sum over window)
+            var historicCal: Double?
+            if let cType = HKObjectType.quantityType(forIdentifier: .activeEnergyBurned) {
+                let samples = await hk.quantitySamples(for: cType, start: start, end: end)
+                let total = samples.reduce(0.0) { $0 + $1.quantity.doubleValue(for: HKUnit.kilocalorie()) }
+                if total > 0 { historicCal = total }
+            }
+
+            // Distance (sum over window)
+            var historicDist: Double?
+            if let dType = HKObjectType.quantityType(forIdentifier: .distanceWalkingRunning) {
+                let samples = await hk.quantitySamples(for: dType, start: start, end: end)
+                let total = samples.reduce(0.0) { $0 + $1.quantity.doubleValue(for: HKUnit.meter()) }
+                if total > 0 { historicDist = total }
+            }
+
+            let sample = ScoreEngine.sample(
+                HR: historicHR, HRV: historicHRV, skinTemperature: historicTemp,
+                stepCount: historicSteps, Calorie: historicCal, Distance: historicDist
+            )
+            applyScore(sample: sample, animate: animate)
+        }
+    }
+
+    @MainActor private func applyScore(sample: ScoreEngine.FeatureSample, animate: Bool) {
         let result = scoreEngine.computeScore(sample: sample)
         if !useDebugOverrides {
             scoreEngine.updateUserBaselinesIfNeeded(with: sample)
         }
-
         if animate {
-            withAnimation(.easeInOut(duration: 0.6)) {
-                scoreDetails = result
-            }
+            withAnimation(.easeInOut(duration: 0.6)) { scoreDetails = result }
         } else {
             scoreDetails = result
         }
     }
 
     @MainActor private func triggerScoreUpdate() {
-        guard scoreEngine != nil else {
-            scoreDetails = nil
-            return
-        }
         computeScoreFromVitals(animate: true)
         startSmoothingLoop()
     }
