@@ -26,6 +26,9 @@ final class VitalsViewModel: ObservableObject {
     @Published var exerciseMinutes: String = "—"       // Today's exercise minutes
     @Published var respirationRate: String = "—"       // Most recent respiration rate (brpm) — optional
     @Published var bloodOxygen: String = "—"           // Most recent SpO₂ (%) — optional
+    @Published var uvExposure: String = "—"            // UV exposure (J/m²) today
+    @Published var activeCalories: String = "—"        // Active energy burned today (kcal)
+    @Published var distance: String = "—"              // Walking/running distance today (m)
 
     private let hk = HealthKitManager.shared
     private let baselineRefreshKey = "ScoreEngine.lastBaselineRefreshDay"
@@ -56,6 +59,9 @@ final class VitalsViewModel: ObservableObject {
             group.addTask { await self.loadExerciseMinutes() }
             group.addTask { await self.loadRespirationRate() }
             group.addTask { await self.loadBloodOxygen() }
+            group.addTask { await self.loadUVExposure() }
+            group.addTask { await self.loadActiveCalories() }
+            group.addTask { await self.loadDistance() }
         }
         await refreshHistoricalBaselinesIfNeeded()
     }
@@ -110,14 +116,14 @@ final class VitalsViewModel: ObservableObject {
         if let hrType = HKObjectType.quantityType(forIdentifier: .restingHeartRate) {
             let samples = await hk.quantitySamples(for: hrType, start: start, end: end)
             if let stats = baselineStats(from: samples, unit: HKUnit.count().unitDivided(by: .minute())) {
-                baselines[.hrMeanBPM] = stats
+                baselines[.HR] = stats
             }
         }
 
         if let hrvType = HKObjectType.quantityType(forIdentifier: .heartRateVariabilitySDNN) {
             let samples = await hk.quantitySamples(for: hrvType, start: start, end: end)
             if let stats = baselineStats(from: samples, unit: HKUnit.secondUnit(with: .milli)) {
-                baselines[.hrvSDNNms] = stats
+                baselines[.HRV] = stats
             }
         }
 
@@ -131,7 +137,28 @@ final class VitalsViewModel: ObservableObject {
             tempStats = baselineStats(from: samples, unit: HKUnit.degreeCelsius())
         }
         if let tempStats {
-            baselines[.wristTempC] = tempStats
+            baselines[.skinTemperature] = tempStats
+        }
+
+        if let stepType = HKObjectType.quantityType(forIdentifier: .stepCount) {
+            let samples = await hk.quantitySamples(for: stepType, start: start, end: end)
+            if let stats = baselineStats(from: samples, unit: HKUnit.count()) {
+                baselines[.stepCount] = stats
+            }
+        }
+
+        if let calType = HKObjectType.quantityType(forIdentifier: .activeEnergyBurned) {
+            let samples = await hk.quantitySamples(for: calType, start: start, end: end)
+            if let stats = baselineStats(from: samples, unit: HKUnit.kilocalorie()) {
+                baselines[.Calorie] = stats
+            }
+        }
+
+        if let distType = HKObjectType.quantityType(forIdentifier: .distanceWalkingRunning) {
+            let samples = await hk.quantitySamples(for: distType, start: start, end: end)
+            if let stats = baselineStats(from: samples, unit: HKUnit.meter()) {
+                baselines[.Distance] = stats
+            }
         }
 
         guard !baselines.isEmpty else { return }
@@ -303,8 +330,57 @@ final class VitalsViewModel: ObservableObject {
         }
     }
 
-    /// Loads the most recent respiration rate (breaths per minute) — optional.
-    private func loadRespirationRate() async {
+    /// Loads today's UV exposure (J/m²).
+    private func loadUVExposure() async {
+        guard let type = HKObjectType.quantityType(forIdentifier: .uvExposure) else { return }
+        await withCheckedContinuation { continuation in
+            hk.todaySum(for: type, options: .cumulativeSum) { [weak self] stats in
+                Task { @MainActor in
+                    if let q = stats?.sumQuantity() {
+                        let val = q.doubleValue(for: HKUnit(from: "J/m^2"))
+                        self?.uvExposure = String(format: "%.1f J/m²", val)
+                    } else { self?.uvExposure = "—" }
+                    continuation.resume()
+                }
+            }
+        }
+    }
+
+    /// Loads today's active energy burned (kcal).
+    private func loadActiveCalories() async {
+        guard let type = HKObjectType.quantityType(forIdentifier: .activeEnergyBurned) else { return }
+        await withCheckedContinuation { continuation in
+            hk.todaySum(for: type) { [weak self] stats in
+                Task { @MainActor in
+                    if let q = stats?.sumQuantity() {
+                        let kcal = q.doubleValue(for: HKUnit.kilocalorie())
+                        self?.activeCalories = String(format: "%.0f kcal", kcal)
+                    } else { self?.activeCalories = "—" }
+                    continuation.resume()
+                }
+            }
+        }
+    }
+
+    /// Loads today's walking + running distance (metres).
+    private func loadDistance() async {
+        guard let type = HKObjectType.quantityType(forIdentifier: .distanceWalkingRunning) else { return }
+        await withCheckedContinuation { continuation in
+            hk.todaySum(for: type) { [weak self] stats in
+                Task { @MainActor in
+                    if let q = stats?.sumQuantity() {
+                        let metres = q.doubleValue(for: HKUnit.meter())
+                        self?.distance = metres >= 1000
+                            ? String(format: "%.2f km", metres / 1000)
+                            : String(format: "%.0f m", metres)
+                    } else { self?.distance = "—" }
+                    continuation.resume()
+                }
+            }
+        }
+    }
+
+    /// Loads the most recent respiration rate (breaths per minute) — optional.    private func loadRespirationRate() async {
         guard let type = HKObjectType.quantityType(forIdentifier: .respiratoryRate) else { return }
         await withCheckedContinuation { continuation in
             hk.mostRecentQuantitySample(for: type) { [weak self] sample in

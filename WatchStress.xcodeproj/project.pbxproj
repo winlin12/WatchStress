@@ -346,13 +346,13 @@
 				INFOPLIST_KEY_CFBundleDisplayName = WatchStress;
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "<key>NSHealthShareUsageDescription</key>\n<string>This app reads your sleep, heart rate, HRV, steps, and other vitals to compute your stress score.</string>\n<key>NSHealthUpdateUsageDescription</key>\n<string>This app writes health data to help you track wellness trends.</string>";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
-				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.winstonylin.WatchStress;
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.winstonlin.WatchStress;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.winstonylin.WatchStress.watchkitapp;
+				PRODUCT_BUNDLE_IDENTIFIER = com.winstonlin.WatchStress.watchkitapp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = watchos;
 				SKIP_INSTALL = YES;
@@ -381,13 +381,13 @@
 				INFOPLIST_KEY_CFBundleDisplayName = WatchStress;
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "<key>NSHealthShareUsageDescription</key>\n<string>This app reads your sleep, heart rate, HRV, steps, and other vitals to compute your stress score.</string>\n<key>NSHealthUpdateUsageDescription</key>\n<string>This app writes health data to help you track wellness trends.</string>";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
-				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.winstonylin.WatchStress;
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.winstonlin.WatchStress;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.winstonylin.WatchStress.watchkitapp;
+				PRODUCT_BUNDLE_IDENTIFIER = com.winstonlin.WatchStress.watchkitapp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = watchos;
 				SKIP_INSTALL = YES;
@@ -427,7 +427,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.winstonylin.WatchStress;
+				PRODUCT_BUNDLE_IDENTIFIER = com.winstonlin.WatchStress;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -464,7 +464,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.winstonylin.WatchStress;
+				PRODUCT_BUNDLE_IDENTIFIER = com.winstonlin.WatchStress;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;

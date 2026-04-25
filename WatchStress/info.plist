@@ -2,7 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- Bundle metadata -->
     <key>CFBundleName</key>
     <string>WatchStress</string>
     <key>CFBundleIdentifier</key>
@@ -23,7 +22,6 @@
         <true/>
     </dict>
 
-    <!-- HealthKit usage descriptions -->
     <key>NSHealthShareUsageDescription</key>
     <string>This app reads your Health data (like heart rate and stress metrics) to provide insights.</string>
     <key>NSHealthUpdateUsageDescription</key>

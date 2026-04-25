@@ -36,12 +36,17 @@ final class HealthKitManager {
         var readTypes: Set<HKObjectType> = []
 
         // Core quantity identifiers
+        // Includes all 7 features used by the stress model:
+        //   HR, HRV, skinTemperature, UltraViolet, stepCount, Calorie, Distance
         let coreQuantityIdentifiers: [HKQuantityTypeIdentifier] = [
             .heartRate,
             .restingHeartRate,
             .heartRateVariabilitySDNN,
             .stepCount,
-            .appleExerciseTime
+            .appleExerciseTime,
+            .activeEnergyBurned,            // Calorie
+            .distanceWalkingRunning,        // Distance
+            .uvExposure,                    // UltraViolet
         ]
 
         // Optional quantity identifiers
@@ -64,7 +69,7 @@ final class HealthKitManager {
             }
         }
 
-        // Wrist/body temperature treated as optional
+        // Wrist/body temperature treated as optional (skinTemperature feature)
         if includeOptional {
             if #available(iOS 16.0, *) {
                 if let wristTemp = HKObjectType.quantityType(forIdentifier: .appleSleepingWristTemperature) {

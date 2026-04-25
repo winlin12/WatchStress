@@ -22,22 +22,37 @@ final class ScoreEngine {
 
     // MARK: - Model feature space (matches priors.json keys)
 
+    /// These raw-value strings MUST match the keys written by emo_train.py into priors.json.
     enum Feature: String, CaseIterable, Codable {
-        case hrMeanBPM
-        case hrvSDNNms
-        case wristTempC
+        // Physiological
+        case HR                 // heart rate (bpm)
+        case HRV                // HRV SDNN (ms)
+        case skinTemperature    // wrist skin temp (°C)
+        case UltraViolet        // UV index (0=NONE … 4=VERY_HIGH)
+        // Activity
+        case stepCount          // steps in window
+        case Calorie            // active kcal in window
+        case Distance           // metres in window
     }
 
     struct FeatureSample {
-        var hrMeanBPM: Double?
-        var hrvSDNNms: Double?
-        var wristTempC: Double?
+        var HR: Double?               // heart rate bpm
+        var HRV: Double?              // SDNN ms
+        var skinTemperature: Double?  // °C
+        var UltraViolet: Double?      // encoded 0-4
+        var stepCount: Double?        // steps
+        var Calorie: Double?          // active kcal
+        var Distance: Double?         // metres
 
         func value(for f: Feature) -> Double? {
             switch f {
-            case .hrMeanBPM: return hrMeanBPM
-            case .hrvSDNNms: return hrvSDNNms
-            case .wristTempC: return wristTempC
+            case .HR:              return HR
+            case .HRV:             return HRV
+            case .skinTemperature: return skinTemperature
+            case .UltraViolet:     return UltraViolet
+            case .stepCount:       return stepCount
+            case .Calorie:         return Calorie
+            case .Distance:        return Distance
             }
         }
     }
@@ -325,14 +340,22 @@ final class ScoreEngine {
 
     /// Convenience constructor if you're pulling numbers directly (bypass string parsing).
     static func sample(
-        hrMeanBPM: Double? = nil,
-        hrvSDNNms: Double? = nil,
-        wristTempC: Double? = nil
+        HR: Double? = nil,
+        HRV: Double? = nil,
+        skinTemperature: Double? = nil,
+        UltraViolet: Double? = nil,
+        stepCount: Double? = nil,
+        Calorie: Double? = nil,
+        Distance: Double? = nil
     ) -> FeatureSample {
         FeatureSample(
-            hrMeanBPM: hrMeanBPM,
-            hrvSDNNms: hrvSDNNms,
-            wristTempC: wristTempC
+            HR: HR,
+            HRV: HRV,
+            skinTemperature: skinTemperature,
+            UltraViolet: UltraViolet,
+            stepCount: stepCount,
+            Calorie: Calorie,
+            Distance: Distance
         )
     }
 
@@ -350,11 +373,11 @@ final class ScoreEngine {
             return Double(filtered)
         }
 
-        let hr = numeric(from: heartRate)
-        let hrv = numeric(from: hrvSDNN)
+        let hr   = numeric(from: heartRate)
+        let hrv  = numeric(from: hrvSDNN)
         let temp = numeric(from: wristTemperature)
 
-        return FeatureSample(hrMeanBPM: hr, hrvSDNNms: hrv, wristTempC: temp)
+        return FeatureSample(HR: hr, HRV: hrv, skinTemperature: temp)
     }
 
     // MARK: - Persistence (UserDefaults)
