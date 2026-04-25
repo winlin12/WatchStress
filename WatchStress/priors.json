@@ -12,9 +12,9 @@
       "test": 377
     },
     "accuracy": {
-      "train": 0.6323,
-      "val": 0.6667,
-      "test": 0.6817
+      "train": 0.6308,
+      "val": 0.662,
+      "test": 0.6764
     },
     "window_min": 30,
     "l2": 1.0,
@@ -64,22 +64,22 @@
     }
   },
   "weights": {
-    "HR": 0.087538,
-    "HRV": -0.0072,
-    "skinTemperature": -0.077226,
-    "UltraViolet": -0.039601,
-    "stepCount": -0.059248,
-    "Calorie": 0.286589,
-    "Distance": -0.209167
+    "HR": 0.093021,
+    "HRV": -0.024568,
+    "skinTemperature": -0.154162,
+    "UltraViolet": -0.054937,
+    "stepCount": -0.042234,
+    "Calorie": 0.368134,
+    "Distance": -0.255667
   },
   "weights_display": {
-    "HR": 30.5449,
-    "HRV": -2.5124,
-    "skinTemperature": -26.9466,
-    "UltraViolet": -13.8181,
-    "stepCount": -20.6734,
+    "HR": 25.2682,
+    "HRV": -6.6736,
+    "skinTemperature": -41.8767,
+    "UltraViolet": -14.9232,
+    "stepCount": -11.4725,
     "Calorie": 100.0,
-    "Distance": -72.9849
+    "Distance": -69.4495
   },
-  "bias": -0.573793
+  "bias": -0.598704
 }
