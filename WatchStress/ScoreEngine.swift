@@ -2,8 +2,9 @@
 //  ScoreEngine.swift
 //  WatchStress
 //
-//  score = sigmoid(b + Σ w_i · z_i) × 100
+//  score = (sigmoid(b + Σ w_i · z_i) × 2 − 1) × 100   →  range −100 … +100
 //  where z_i = clip((x_i - μ_i) / σ_i, -3, +3)
+//  0 = neutral, −100 = maximally stressed, +100 = maximally calm
 //
 //  Weights and priors are loaded from priors.json (Copy Bundle Resources).
 //  If the bundle resource is missing, the embedded fallback below is used.
@@ -101,7 +102,7 @@ final class ScoreEngine {
     }
 
     struct ScoreResult {
-        /// Final stress probability mapped to 0–100. Higher = more stressed.
+        /// Stress score mapped to −100…+100. Negative = stressed, 0 = neutral, positive = calm.
         let score: Double
         /// Raw linear output: b + Σ w_i · z_i
         let linearOutput: Double
@@ -214,8 +215,8 @@ final class ScoreEngine {
 
     /// Compute score:
     ///   1. z_i = clip((x_i - μ_i) / σ_i, -3, +3)
-    ///   2. linear = b + Σ w_i · z_i          (Wx + b)
-    ///   3. score  = sigmoid(linear) × 100     (0 = calm, 100 = stressed)
+    ///   2. linear = b + Σ w_i · z_i
+    ///   3. score  = (sigmoid(linear) × 2 − 1) × 100   (−100 = stressed, 0 = neutral, +100 = calm)
     func computeScore(sample: FeatureSample) -> ScoreResult {
         let bias = priorsFile.bias
         var linear = bias
@@ -233,8 +234,8 @@ final class ScoreEngine {
             rawContributions.append((feature: f, weight: w, z: z, value: x, mean: prior.mean, std: prior.std))
         }
 
-        // sigmoid(linear) × 100
-        let score = sigmoid(linear) * 100.0
+        // (sigmoid(linear) × 2 − 1) × 100  →  range −100…+100
+        let score = (sigmoid(linear) * 2.0 - 1.0) * 100.0
 
         // Confidence: based on how many features contributed
         let used = rawContributions.count

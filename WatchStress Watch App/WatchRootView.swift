@@ -4,7 +4,7 @@ import SwiftUI
 /// It will host quick actions like logging a check-in and, in the future,
 /// glanceable metrics or complications.
 struct WatchRootView: View {
-    @State private var score: Double = 72
+    @State private var score: Double = 0
 
     var body: some View {
         VStack(spacing: 10) {

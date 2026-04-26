@@ -5,8 +5,8 @@ import HealthKit
 /// iOSRootView displays the stress ring and entry points for viewing health vitals.
 /// Presents a sheet with detailed vitals and includes a slider to simulate a score.
 struct iOSRootView: View {
-    /// Simulated stress score (0...100) used to drive the ring UI.
-    @State private var score: Double = 72
+    /// Simulated stress score (−100…+100) used to drive the ring UI.
+    @State private var score: Double = 0
     /// View model bridging HealthKit values for the sheet.
     @StateObject private var vitals = VitalsViewModel()
     /// Controls presentation of the vitals sheet.
@@ -111,7 +111,7 @@ struct iOSRootView: View {
 
                 if scoreDetails == nil {
                     // Quick way to simulate different scores during development
-                    Slider(value: $score, in: 0...100, step: 1)
+                    Slider(value: $score, in: -100...100, step: 1)
                         .padding(.horizontal)
                 }
 
@@ -260,7 +260,8 @@ private struct ScoreDetailsView: View {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text("z_i = clip((x_i - μ_i) / σ_i, -3, +3)")
                                 Text("linear = b + Σ w_i · z_i")
-                                Text("score  = sigmoid(linear) × 100")
+                                Text("score  = (sigmoid(linear) × 2 − 1) × 100")
+                                Text("range: −100 (stressed) … 0 (neutral) … +100 (calm)")
                                 Text("linear = \(format(result.linearOutput, decimals: 3))")
                                 Text("score  = \(format(result.score, decimals: 1))")
                             }

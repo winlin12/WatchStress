@@ -1,0 +1,64 @@
+{
+  "meta": {
+    "source": "K-EmoPhone (EMO)",
+    "split": {
+      "train": 47,
+      "val": 20,
+      "test": 10
+    },
+    "n_samples": {
+      "train": 2374,
+      "val": 1179,
+      "test": 509
+    },
+    "accuracy": {
+      "train": 0.6331,
+      "val": 0.6692,
+      "test": 0.6621
+    },
+    "window_min": 30,
+    "l2": 1.0,
+    "labels": {
+      "stressed": "ESM stress > 0",
+      "baseline": "ESM stress <= 0"
+    },
+    "features": [
+      "HR",
+      "HRV",
+      "UltraViolet",
+      "Calorie"
+    ],
+    "notes": "weights contains raw logistic regression coefficients (not rescaled). weights_display contains the same values linearly scaled to [-100, +100] for human-readable interpretation only. bias is threshold-calibrated on the val set to maximise accuracy. Score = sigmoid(b + sum(w_i * z_i)) * 100 where z_i = clip((x_i - mu_i)/sigma_i, -3, 3)."
+  },
+  "priors": {
+    "HR": {
+      "mean": 75.505293,
+      "std": 7.103462
+    },
+    "HRV": {
+      "mean": 74.444314,
+      "std": 15.064097
+    },
+    "UltraViolet": {
+      "mean": 0.025427,
+      "std": 0.091649
+    },
+    "Calorie": {
+      "mean": 30.792415,
+      "std": 117.766886
+    }
+  },
+  "weights": {
+    "HR": 0.062892,
+    "HRV": -0.016587,
+    "UltraViolet": -0.154969,
+    "Calorie": 0.060099
+  },
+  "weights_display": {
+    "HR": 40.5835,
+    "HRV": -10.7037,
+    "UltraViolet": -100.0,
+    "Calorie": 38.7813
+  },
+  "bias": -5.060374
+}

@@ -6,13 +6,9 @@ Trains a linear stress-scoring model  z = W·x + b  from the K-EmoPhone (EMO)
 dataset and writes a priors.json file compatible with ScoreEngine.swift.
 
 Features (all available in HealthKit):
-  HR             – heart rate (bpm)
-  HRV            – SDNN of RR-intervals (ms)
-  skinTemperature – wrist skin temperature (°C)
-  UltraViolet    – UV intensity encoded (NONE=0 … VERY_HIGH=4)
-  stepCount      – steps accumulated in the lookback window
-  Calorie        – active calories accumulated in the window (kcal)
-  Distance       – distance accumulated in the window (m)
+  HR      – heart rate (bpm)
+  HRV     – SDNN of RR-intervals (ms)
+  Calorie – active calories accumulated in the window (kcal)
 
 Stress labels come from the ESM self-reports (EsmResponse.csv):
   stress > 0  → stressed  (y = 1)
@@ -22,8 +18,11 @@ Split:  first 50 subjects → train
         next  20 subjects → validation
         last  10 subjects → test  (held-out, not used during training)
 
-Training uses PyTorch logistic regression with CUDA if a GPU is available
-(e.g. NVIDIA 5070 Ti), otherwise falls back to CPU.
+Feature extraction is parallelised across subjects (ThreadPoolExecutor) and
+vectorised per subject using numpy searchsorted — each CSV is loaded once.
+
+Training uses PyTorch logistic regression with CUDA if a GPU is available,
+otherwise falls back to NumPy Newton-Raphson.
 
 Usage:
     python emo_train.py --emo_root ./emo --out priors.json
@@ -35,6 +34,7 @@ import argparse
 import json
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -60,11 +60,8 @@ except ImportError:
 FEATURE_NAMES: List[str] = [
     "HR",
     "HRV",
-    "skinTemperature",
     "UltraViolet",
-    "stepCount",
     "Calorie",
-    "Distance",
 ]
 
 UV_MAP: Dict[str, float] = {
@@ -84,7 +81,6 @@ WINDOW_DEFAULT_MIN = 30   # minutes of sensor data before each ESM response
 # ─────────────────────────────────────────────────────────────────────────────
 
 def load_csv_safe(path: str) -> Optional[pd.DataFrame]:
-    """Load a CSV file, returning None if it doesn't exist or is empty."""
     if not os.path.exists(path):
         return None
     try:
@@ -94,28 +90,18 @@ def load_csv_safe(path: str) -> Optional[pd.DataFrame]:
         return None
 
 
-def sdnn_ms(rri_ms: np.ndarray) -> float:
-    """Compute SDNN (std of NN intervals) in milliseconds."""
-    if len(rri_ms) < 2:
+def rmssd_ms(rri_ms: np.ndarray) -> float:
+    """RMSSD — root mean square of successive RR differences.
+    More sensitive to parasympathetic (HF) activity than SDNN;
+    drops under stress as vagal tone withdraws."""
+    if len(rri_ms) < 3:
         return float("nan")
-    # Basic ectopic-beat filter: keep only IBIs within ±20% of the median
     med = float(np.median(rri_ms))
     rri_clean = rri_ms[(rri_ms > 0.80 * med) & (rri_ms < 1.20 * med)]
-    if len(rri_clean) < 2:
+    if len(rri_clean) < 3:
         return float("nan")
-    return float(np.std(rri_clean, ddof=1))
-
-
-def cumulative_delta(df: pd.DataFrame, col: str, t0_ms: int, t1_ms: int) -> float:
-    """
-    For cumulative-today columns (stepsToday, caloriesToday, distanceToday):
-    return the increase within [t0_ms, t1_ms].
-    """
-    mask = (df["timestamp"] >= t0_ms) & (df["timestamp"] <= t1_ms)
-    sub = df.loc[mask, col]
-    if len(sub) < 2:
-        return float("nan")
-    return float(sub.iloc[-1] - sub.iloc[0])
+    diffs = np.diff(rri_clean)
+    return float(np.sqrt(np.mean(diffs ** 2)))
 
 
 def robust_mean_std(x: np.ndarray) -> Tuple[float, float]:
@@ -128,6 +114,158 @@ def robust_mean_std(x: np.ndarray) -> Tuple[float, float]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Vectorised feature extraction — load each CSV once, compute all windows
+# ─────────────────────────────────────────────────────────────────────────────
+
+def load_subject_data(subj_dir: str) -> Dict[str, np.ndarray]:
+    """Load and sort all sensor CSVs for one subject into NumPy arrays."""
+    d: Dict[str, np.ndarray] = {}
+
+    def _load_sorted(fname: str, *cols: str) -> None:
+        df = load_csv_safe(os.path.join(subj_dir, fname))
+        if df is None:
+            return
+        df = df.sort_values("timestamp")
+        d[fname + "_ts"] = df["timestamp"].values.astype(np.int64)
+        for col in cols:
+            if col in df.columns:
+                d[fname + "_" + col] = df[col].values.astype(float)
+
+    _load_sorted("HR.csv", "bpm")
+    _load_sorted("RRI.csv", "interval")
+    _load_sorted("Calorie.csv", "caloriesToday")
+
+    uv_df = load_csv_safe(os.path.join(subj_dir, "UltraViolet.csv"))
+    if uv_df is not None:
+        uv_df = uv_df.sort_values("timestamp")
+        d["UltraViolet.csv_ts"] = uv_df["timestamp"].values.astype(np.int64)
+        d["UltraViolet.csv_intensity"] = (
+            uv_df["intensity"]
+            .map(lambda s: UV_MAP.get(str(s).strip().upper(), 0.0))
+            .values.astype(float)
+        )
+    return d
+
+
+def _window_mean(ts: np.ndarray, vals: np.ndarray,
+                 t0s: np.ndarray, t1s: np.ndarray, min_count: int = 1) -> np.ndarray:
+    out = np.full(len(t0s), np.nan)
+    for i in range(len(t0s)):
+        lo = np.searchsorted(ts, t0s[i])
+        hi = np.searchsorted(ts, t1s[i], side="right")
+        if hi - lo >= min_count:
+            out[i] = vals[lo:hi].mean()
+    return out
+
+
+def _window_rmssd(ts: np.ndarray, vals: np.ndarray,
+                  t0s: np.ndarray, t1s: np.ndarray) -> np.ndarray:
+    out = np.full(len(t0s), np.nan)
+    for i in range(len(t0s)):
+        lo = np.searchsorted(ts, t0s[i])
+        hi = np.searchsorted(ts, t1s[i], side="right")
+        out[i] = rmssd_ms(vals[lo:hi])
+    return out
+
+
+def _window_cumulative_delta(ts: np.ndarray, vals: np.ndarray,
+                              t0s: np.ndarray, t1s: np.ndarray) -> np.ndarray:
+    out = np.full(len(t0s), np.nan)
+    for i in range(len(t0s)):
+        lo = np.searchsorted(ts, t0s[i])
+        hi = np.searchsorted(ts, t1s[i], side="right")
+        if hi - lo >= 2:
+            out[i] = vals[hi - 1] - vals[lo]
+    return out
+
+
+def extract_features_batch(data: Dict[str, np.ndarray],
+                            timestamps_ms: np.ndarray,
+                            window_ms: int) -> np.ndarray:
+    """Return (N, 4) feature matrix for all ESM timestamps at once.
+    Features: HR, HRV (RMSSD), UltraViolet, Calorie."""
+    t0s = timestamps_ms - window_ms
+    t1s = timestamps_ms
+    n   = len(timestamps_ms)
+    X   = np.full((n, len(FEATURE_NAMES)), np.nan)
+
+    if "HR.csv_ts" in data:
+        X[:, 0] = _window_mean(data["HR.csv_ts"], data["HR.csv_bpm"], t0s, t1s, min_count=3)
+    if "RRI.csv_ts" in data:
+        X[:, 1] = _window_rmssd(data["RRI.csv_ts"], data["RRI.csv_interval"], t0s, t1s)
+    X[:, 2] = 0.0
+    if "UltraViolet.csv_ts" in data:
+        uv = _window_mean(data["UltraViolet.csv_ts"], data["UltraViolet.csv_intensity"], t0s, t1s)
+        X[:, 2] = np.where(np.isfinite(uv), uv, 0.0)
+    if "Calorie.csv_ts" in data:
+        X[:, 3] = _window_cumulative_delta(
+            data["Calorie.csv_ts"], data["Calorie.csv_caloriesToday"], t0s, t1s
+        )
+    return X
+
+
+def _process_subject(
+    sid: str,
+    subj_dir: str,
+    esm_sub: pd.DataFrame,
+    window_ms: int,
+) -> Tuple[str, np.ndarray, np.ndarray]:
+    """Load one subject's CSVs and extract all ESM windows. Runs in a thread."""
+    sensor_data = load_subject_data(subj_dir)
+    if "HR.csv_ts" not in sensor_data:
+        return sid, np.empty((0, len(FEATURE_NAMES))), np.empty(0, dtype=int)
+    timestamps = esm_sub["responseTime"].values.astype(np.int64)
+    labels     = esm_sub["label"].values.astype(int)
+    X_batch    = extract_features_batch(sensor_data, timestamps, window_ms)
+    valid      = np.isfinite(X_batch[:, 0])          # require valid HR
+    return sid, X_batch[valid], labels[valid]
+
+
+def collect_split(
+    subjects: List[str],
+    emo_root: str,
+    esm: pd.DataFrame,
+    window_ms: int,
+    n_workers: int = 8,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Extract features for all subjects in parallel."""
+    tasks = {sid: esm[esm["pcode"] == sid]
+             for sid in subjects if not esm[esm["pcode"] == sid].empty}
+    for sid in subjects:
+        if sid not in tasks:
+            print(f"  [skip] {sid}: no ESM responses")
+
+    X_list, y_list = [], []
+    results: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
+
+    with ThreadPoolExecutor(max_workers=n_workers) as pool:
+        futures = {
+            pool.submit(_process_subject, sid,
+                        os.path.join(emo_root, sid), esm_sub, window_ms): sid
+            for sid, esm_sub in tasks.items()
+        }
+        for fut in as_completed(futures):
+            sid, X_batch, y_batch = fut.result()
+            results[sid] = (X_batch, y_batch)
+
+    for sid in subjects:
+        if sid not in results:
+            continue
+        X_batch, y_batch = results[sid]
+        n_total = len(esm[esm["pcode"] == sid])
+        print(f"  [ok] {sid}: {len(X_batch)}/{n_total} windows extracted")
+        if len(X_batch) > 0:
+            X_list.append(X_batch)
+            y_list.extend(y_batch.tolist())
+
+    if not X_list:
+        return np.empty((0, len(FEATURE_NAMES))), np.empty(0, dtype=int)
+    return np.vstack(X_list), np.array(y_list, dtype=int)
+
+
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Feature extraction for a single ESM event
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -137,8 +275,8 @@ def extract_features(
     window_ms: int,
 ) -> Optional[np.ndarray]:
     """
-    Return a 7-element feature vector for one ESM event, or None if data
-    is insufficient.
+    Return a 5-element feature vector for one ESM event, or None if data
+    is insufficient.  Features: HR, HRV, stepCount, Calorie, Distance.
 
     Sensor data window: [response_ts_ms - window_ms, response_ts_ms]
     """
@@ -161,28 +299,7 @@ def extract_features(
     if rri_df is not None:
         mask_rri = (rri_df["timestamp"] >= t0) & (rri_df["timestamp"] <= t1)
         rri_vals = rri_df.loc[mask_rri, "interval"].values.astype(float)
-        feat_hrv = sdnn_ms(rri_vals)
-
-    # ── Skin Temperature ──────────────────────────────────────────────────
-    temp_df = load_csv_safe(os.path.join(subj_dir, "SkinTemperature.csv"))
-    feat_temp = float("nan")
-    if temp_df is not None:
-        mask_t = (temp_df["timestamp"] >= t0) & (temp_df["timestamp"] <= t1)
-        temp_vals = temp_df.loc[mask_t, "temperature"].values.astype(float)
-        if len(temp_vals) >= 1:
-            feat_temp = float(np.mean(temp_vals))
-
-    # ── UV ────────────────────────────────────────────────────────────────
-    uv_df = load_csv_safe(os.path.join(subj_dir, "UltraViolet.csv"))
-    feat_uv = 0.0   # default: NONE (indoors / no reading)
-    if uv_df is not None:
-        mask_uv = (uv_df["timestamp"] >= t0) & (uv_df["timestamp"] <= t1)
-        uv_sub = uv_df.loc[mask_uv]
-        if not uv_sub.empty:
-            encoded = uv_sub["intensity"].map(
-                lambda s: UV_MAP.get(str(s).strip().upper(), 0.0)
-            ).values.astype(float)
-            feat_uv = float(np.mean(encoded))
+        feat_hrv = rmssd_ms(rri_vals)
 
     # ── Step Count ────────────────────────────────────────────────────────
     step_df = load_csv_safe(os.path.join(subj_dir, "StepCount.csv"))
@@ -202,15 +319,7 @@ def extract_features(
     if dist_df is not None:
         feat_dist = cumulative_delta(dist_df, "distanceToday", t0, t1)
 
-    vec = np.array([
-        feat_hr,
-        feat_hrv,
-        feat_temp,
-        feat_uv,
-        feat_steps,
-        feat_cal,
-        feat_dist,
-    ], dtype=float)
+    vec = np.array([feat_hr, feat_hrv, feat_steps, feat_cal, feat_dist], dtype=float)
 
     # Require at minimum HR to be valid
     if not np.isfinite(vec[0]):
@@ -236,17 +345,22 @@ def fit_logistic_numpy(
 ) -> Tuple[np.ndarray, float]:
     """
     Fit  P(y=1) = σ(X w + b)  via Newton-Raphson with L2 regularisation.
-    Returns (weights, bias).
+    Uses class-balanced sample weights so stressed/calm imbalance doesn't
+    dominate the gradient. Returns (weights, bias).
     """
     n, d = X.shape
+    n_pos = int(y.sum())
+    n_neg = n - n_pos
+    sw = np.where(y == 1, n / (2.0 * max(n_pos, 1)), n / (2.0 * max(n_neg, 1)))
     w = np.zeros(d, dtype=float)
     b = 0.0
     for _ in range(max_iter):
         z = X @ w + b
         p = sigmoid(z)
-        r = p * (1.0 - p)                          # IRLS weights
-        grad_w = X.T @ (p - y) + l2 * w
-        grad_b = float(np.sum(p - y))
+        r = sw * p * (1.0 - p)
+        residuals = sw * (p - y)
+        grad_w = X.T @ residuals + l2 * w
+        grad_b = float(np.sum(residuals))
         H = X.T @ (X * r[:, None]) + l2 * np.eye(d)
         try:
             dw = np.linalg.solve(H, grad_w)
@@ -290,7 +404,10 @@ def fit_logistic_torch(
     nn.init.zeros_(model.bias)
 
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=l2 / n)
-    bce = nn.BCEWithLogitsLoss()
+    n_pos = int((y == 1).sum())
+    n_neg = n - n_pos
+    pos_weight = torch.tensor([n_neg / max(n_pos, 1)], dtype=torch.float32, device=dev)
+    bce = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
     dataset = torch.utils.data.TensorDataset(Xt, yt)
     loader  = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
@@ -409,6 +526,8 @@ def main() -> None:
                     help="Training epochs for PyTorch trainer (default: 2000)")
     ap.add_argument("--lr",      type=float, default=0.05,
                     help="Learning rate for Adam optimiser (default: 0.05)")
+    ap.add_argument("--workers", type=int, default=8,
+                    help="Parallel threads for subject data loading (default: 8)")
     args = ap.parse_args()
 
     # ── GPU check ─────────────────────────────────────────────────────────
@@ -448,35 +567,13 @@ def main() -> None:
     # stress column: -3 … +3; positive → stressed
     esm["label"] = (esm["stress"] > 0).astype(int)
 
-    # ── Feature extraction ────────────────────────────────────────────────
-    def collect_split(subjects: List[str]) -> Tuple[np.ndarray, np.ndarray]:
-        X_rows, y_rows = [], []
-        for sid in subjects:
-            subj_dir = os.path.join(emo_root, sid)
-            esm_sub = esm[esm["pcode"] == sid]
-            if esm_sub.empty:
-                print(f"  [skip] {sid}: no ESM responses")
-                continue
-            n_ok = 0
-            for _, row in esm_sub.iterrows():
-                ts_ms = int(row["responseTime"])
-                feat = extract_features(subj_dir, ts_ms, window_ms)
-                if feat is None:
-                    continue
-                X_rows.append(feat)
-                y_rows.append(int(row["label"]))
-                n_ok += 1
-            print(f"  [ok] {sid}: {n_ok}/{len(esm_sub)} windows extracted")
-        if not X_rows:
-            return np.empty((0, len(FEATURE_NAMES))), np.empty(0, dtype=int)
-        return np.array(X_rows, dtype=float), np.array(y_rows, dtype=int)
-
+    # ── Feature extraction (parallel) ────────────────────────────────────────
     print("\n── Training subjects ──")
-    X_train, y_train = collect_split(train_subj)
+    X_train, y_train = collect_split(train_subj, emo_root, esm, window_ms, args.workers)
     print("\n── Validation subjects ──")
-    X_val, y_val     = collect_split(val_subj)
+    X_val, y_val     = collect_split(val_subj,   emo_root, esm, window_ms, args.workers)
     print("\n── Test subjects ──")
-    X_test, y_test   = collect_split(test_subj)
+    X_test, y_test   = collect_split(test_subj,  emo_root, esm, window_ms, args.workers)
 
     if len(X_train) < 10:
         sys.exit(f"[error] Too few training samples: {len(X_train)}. Check --emo_root path.")
@@ -501,7 +598,7 @@ def main() -> None:
         for j, name in enumerate(FEATURE_NAMES):
             mu = priors[name]["mean"]
             sd = priors[name]["std"]
-            Xz[:, j] = (X[:, j] - mu) / (sd + 1e-9)
+            Xz[:, j] = np.clip((X[:, j] - mu) / (sd + 1e-9), -3.0, 3.0)
         return Xz
 
     Xz_train = standardise(X_train)
