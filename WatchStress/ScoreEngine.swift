@@ -2,9 +2,18 @@
 //  ScoreEngine.swift
 //  WatchStress
 //
-//  score = (sigmoid(b + Σ w_i · z_i) × 2 − 1) × 100   →  range −100 … +100
-//  where z_i = clip((x_i - μ_i) / σ_i, -3, +3)
-//  0 = neutral, −100 = maximally stressed, +100 = maximally calm
+//  score = clip(b + Σ w_i · z_i, -3, +3)
+//  where z_i = clip((x_i - μ_i) / σ_i, -3, +3)  using per-person priors once accumulated
+//  Positive score = stressed, negative = calm, 0 = neutral
+//  (will be scaled to -100…+100 in a later pass)
+//
+//  Features (must match FEATURE_NAMES in app_accuracy.py):
+//    HR_mean_30  — mean heart rate over last 30 min (bpm)
+//    HR_std_30   — std dev of HR over last 30 min (bpm)
+//    HR_slope_30 — linear slope of HR over last 30 min (bpm/min)
+//    HRV_30      — HRV SDNN over last 30 min (ms), most recent sample in window
+//    HR_mean_5   — mean HR over last 5 min (bpm)
+//    HRV_5       — HRV SDNN over last 5 min (ms), most recent sample in window
 //
 //  Weights and priors are loaded from priors.json (Copy Bundle Resources).
 //  If the bundle resource is missing, the embedded fallback below is used.
@@ -17,24 +26,22 @@ import Foundation
 private let embeddedPriorsJSON = """
 {
   "priors": {
-    "HR":              { "mean": 75.799037,    "std": 7.016697    },
-    "HRV":             { "mean": 69.574095,    "std": 11.529691   },
-    "skinTemperature": { "mean": 32.475552,    "std": 1.656109    },
-    "UltraViolet":     { "mean": 0.025315,     "std": 0.090567    },
-    "stepCount":       { "mean": 313.647486,   "std": 560.849122  },
-    "Calorie":         { "mean": 31.801333,    "std": 112.468417  },
-    "Distance":        { "mean": 23986.717141, "std": 43445.689561 }
+    "HR_mean_30":  { "mean": 75.8,  "std": 7.0  },
+    "HR_std_30":   { "mean": 4.5,   "std": 2.5  },
+    "HR_slope_30": { "mean": 0.0,   "std": 0.5  },
+    "HRV_30":      { "mean": 45.0,  "std": 18.0 },
+    "HR_mean_5":   { "mean": 75.8,  "std": 7.0  },
+    "HRV_5":       { "mean": 45.0,  "std": 18.0 }
   },
   "weights": {
-    "HR":              0.087509,
-    "HRV":            -0.007194,
-    "skinTemperature":-0.077186,
-    "UltraViolet":    -0.039582,
-    "stepCount":      -0.059210,
-    "Calorie":         0.286595,
-    "Distance":       -0.209232
+    "HR_mean_30":  0.0,
+    "HR_std_30":   0.0,
+    "HR_slope_30": 0.0,
+    "HRV_30":      0.0,
+    "HR_mean_5":   0.0,
+    "HRV_5":       0.0
   },
-  "bias": -0.573793
+  "bias": 0.0
 }
 """
 
@@ -44,35 +51,30 @@ final class ScoreEngine {
 
     /// These raw-value strings MUST match the keys written by emo_train.py into priors.json.
     enum Feature: String, CaseIterable, Codable {
-        // Physiological
-        case HR                 // heart rate (bpm)
-        case HRV                // HRV SDNN (ms)
-        case skinTemperature    // wrist skin temp (°C)
-        case UltraViolet        // UV index (0=NONE … 4=VERY_HIGH)
-        // Activity
-        case stepCount          // steps in window
-        case Calorie            // active kcal in window
-        case Distance           // metres in window
+        case HR_mean_30   // mean HR over last 30 min (bpm)
+        case HR_std_30    // std dev of HR over last 30 min (bpm)
+        case HR_slope_30  // linear slope of HR over last 30 min (bpm/min)
+        case HRV_30       // HRV SDNN in last 30 min (ms)
+        case HR_mean_5    // mean HR over last 5 min (bpm)
+        case HRV_5        // HRV SDNN in last 5 min (ms)
     }
 
     struct FeatureSample {
-        var HR: Double?               // heart rate bpm
-        var HRV: Double?              // SDNN ms
-        var skinTemperature: Double?  // °C
-        var UltraViolet: Double?      // encoded 0-4
-        var stepCount: Double?        // steps
-        var Calorie: Double?          // active kcal
-        var Distance: Double?         // metres
+        var HR_mean_30:  Double?   // mean bpm, 30 min window
+        var HR_std_30:   Double?   // std dev bpm, 30 min window
+        var HR_slope_30: Double?   // slope bpm/min, 30 min window
+        var HRV_30:      Double?   // HRV SDNN ms, 30 min window
+        var HR_mean_5:   Double?   // mean bpm, 5 min window
+        var HRV_5:       Double?   // HRV SDNN ms, 5 min window
 
         func value(for f: Feature) -> Double? {
             switch f {
-            case .HR:              return HR
-            case .HRV:             return HRV
-            case .skinTemperature: return skinTemperature
-            case .UltraViolet:     return UltraViolet
-            case .stepCount:       return stepCount
-            case .Calorie:         return Calorie
-            case .Distance:        return Distance
+            case .HR_mean_30:  return HR_mean_30
+            case .HR_std_30:   return HR_std_30
+            case .HR_slope_30: return HR_slope_30
+            case .HRV_30:      return HRV_30
+            case .HR_mean_5:   return HR_mean_5
+            case .HRV_5:       return HRV_5
             }
         }
     }
@@ -83,7 +85,7 @@ final class ScoreEngine {
         let weight: Double
         /// z-score deviation (x-mu)/sigma
         let z: Double
-        /// Change in final score from this feature alone (tanh-mapped)
+        /// Change in final score from this feature alone (same score mapping as total)
         let scoreDelta: Double
         /// Raw feature value x
         let value: Double
@@ -102,9 +104,9 @@ final class ScoreEngine {
     }
 
     struct ScoreResult {
-        /// Stress score mapped to −100…+100. Negative = stressed, 0 = neutral, positive = calm.
+        /// Stress score in −3…+3. Positive = stressed, negative = calm, 0 = neutral.
         let score: Double
-        /// Raw linear output: b + Σ w_i · z_i
+        /// Raw linear output: b + Σ w_i · z_i (before clamping)
         let linearOutput: Double
         /// Number of features that contributed to this score
         let featuresUsed: Int
@@ -153,28 +155,25 @@ final class ScoreEngine {
 
     /// Pure-Swift fallback — no JSON parsing, never fails.
     static let hardcodedPriorsFile: PriorsFile = {
-        let P = PriorsFile.Prior.self
         return PriorsFile(
             meta: nil,
             priors: [
-                "HR":              PriorsFile.Prior(mean: 75.799037,    std: 7.016697),
-                "HRV":             PriorsFile.Prior(mean: 69.574095,    std: 11.529691),
-                "skinTemperature": PriorsFile.Prior(mean: 32.475552,    std: 1.656109),
-                "UltraViolet":     PriorsFile.Prior(mean: 0.025315,     std: 0.090567),
-                "stepCount":       PriorsFile.Prior(mean: 313.647486,   std: 560.849122),
-                "Calorie":         PriorsFile.Prior(mean: 31.801333,    std: 112.468417),
-                "Distance":        PriorsFile.Prior(mean: 23986.717141, std: 43445.689561),
+                "HR_mean_30":  PriorsFile.Prior(mean: 75.8, std: 7.0),
+                "HR_std_30":   PriorsFile.Prior(mean: 4.5,  std: 2.5),
+                "HR_slope_30": PriorsFile.Prior(mean: 0.0,  std: 0.5),
+                "HRV_30":      PriorsFile.Prior(mean: 45.0, std: 18.0),
+                "HR_mean_5":   PriorsFile.Prior(mean: 75.8, std: 7.0),
+                "HRV_5":       PriorsFile.Prior(mean: 45.0, std: 18.0),
             ],
             weights: [
-                "HR":               0.087509,
-                "HRV":             -0.007194,
-                "skinTemperature": -0.077186,
-                "UltraViolet":     -0.039582,
-                "stepCount":       -0.059210,
-                "Calorie":          0.286595,
-                "Distance":        -0.209232,
+                "HR_mean_30":  0.0,
+                "HR_std_30":   0.0,
+                "HR_slope_30": 0.0,
+                "HRV_30":      0.0,
+                "HR_mean_5":   0.0,
+                "HRV_5":       0.0,
             ],
-            bias: -0.573793
+            bias: 0.0
         )
     }()
 
@@ -214,9 +213,9 @@ final class ScoreEngine {
     }
 
     /// Compute score:
-    ///   1. z_i = clip((x_i - μ_i) / σ_i, -3, +3)
+    ///   1. z_i    = clip((x_i - μ_i) / σ_i, -3, +3)
     ///   2. linear = b + Σ w_i · z_i
-    ///   3. score  = (sigmoid(linear) × 2 − 1) × 100   (−100 = stressed, 0 = neutral, +100 = calm)
+    ///   3. score  = clip(linear, -3, +3)   (positive = stressed, negative = calm)
     func computeScore(sample: FeatureSample) -> ScoreResult {
         let bias = priorsFile.bias
         var linear = bias
@@ -234,8 +233,7 @@ final class ScoreEngine {
             rawContributions.append((feature: f, weight: w, z: z, value: x, mean: prior.mean, std: prior.std))
         }
 
-        // (sigmoid(linear) × 2 − 1) × 100  →  range −100…+100
-        let score = (sigmoid(linear) * 2.0 - 1.0) * 100.0
+        let score = clamp(linear, lo: -zClip, hi: zClip)
 
         // Confidence: based on how many features contributed
         let used = rawContributions.count
@@ -244,7 +242,8 @@ final class ScoreEngine {
         // Per-feature score delta: score(linear) - score(linear - w_i·z_i)
         let drivers: [DriverContribution] = rawContributions.map { item in
             let linearWithout = linear - item.weight * item.z
-            let delta = score - sigmoid(linearWithout) * 100.0
+            let scoreWithout = clamp(linearWithout, lo: -zClip, hi: zClip)
+            let delta = score - scoreWithout
             return DriverContribution(
                 feature: item.feature,
                 weight: item.weight,
@@ -292,46 +291,22 @@ final class ScoreEngine {
 
 
 
-    /// Convenience constructor if you're pulling numbers directly (bypass string parsing).
     static func sample(
-        HR: Double? = nil,
-        HRV: Double? = nil,
-        skinTemperature: Double? = nil,
-        UltraViolet: Double? = nil,
-        stepCount: Double? = nil,
-        Calorie: Double? = nil,
-        Distance: Double? = nil
+        HR_mean_30:  Double? = nil,
+        HR_std_30:   Double? = nil,
+        HR_slope_30: Double? = nil,
+        HRV_30:      Double? = nil,
+        HR_mean_5:   Double? = nil,
+        HRV_5:       Double? = nil
     ) -> FeatureSample {
         FeatureSample(
-            HR: HR,
-            HRV: HRV,
-            skinTemperature: skinTemperature,
-            UltraViolet: UltraViolet,
-            stepCount: stepCount,
-            Calorie: Calorie,
-            Distance: Distance
+            HR_mean_30:  HR_mean_30,
+            HR_std_30:   HR_std_30,
+            HR_slope_30: HR_slope_30,
+            HRV_30:      HRV_30,
+            HR_mean_5:   HR_mean_5,
+            HRV_5:       HRV_5
         )
-    }
-
-    /// Convenience parser for formatted strings like "54 bpm", "42 ms", "36.5 C".
-    static func sampleFromFormattedStrings(
-        heartRate: String,
-        hrvSDNN: String,
-        wristTemperature: String
-    ) -> FeatureSample {
-        func numeric(from string: String) -> Double? {
-            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-            let allowed = "0123456789.-"
-            let filtered = trimmed.filter { allowed.contains($0) }
-            guard !filtered.isEmpty else { return nil }
-            return Double(filtered)
-        }
-
-        let hr   = numeric(from: heartRate)
-        let hrv  = numeric(from: hrvSDNN)
-        let temp = numeric(from: wristTemperature)
-
-        return FeatureSample(HR: hr, HRV: hrv, skinTemperature: temp)
     }
 
     // MARK: - Persistence (UserDefaults)
@@ -389,10 +364,6 @@ final class ScoreEngine {
     }
 
     // MARK: - Utilities
-
-    private func sigmoid(_ x: Double) -> Double {
-        1.0 / (1.0 + exp(-min(max(x, -50), 50)))
-    }
 
     private func clamp(_ x: Double, lo: Double, hi: Double) -> Double {
         min(hi, max(lo, x))

@@ -12,9 +12,9 @@
       "test": 509
     },
     "accuracy": {
-      "train": 0.6331,
-      "val": 0.6692,
-      "test": 0.6621
+      "train": 0.5017,
+      "val": 0.4818,
+      "test": 0.499
     },
     "window_min": 30,
     "l2": 1.0,
@@ -23,42 +23,56 @@
       "baseline": "ESM stress <= 0"
     },
     "features": [
-      "HR",
-      "HRV",
-      "UltraViolet",
-      "Calorie"
+      "HR_mean_30",
+      "HR_std_30",
+      "HR_slope_30",
+      "HRV_30",
+      "HR_mean_5",
+      "HRV_5"
     ],
-    "notes": "weights contains raw logistic regression coefficients (not rescaled). weights_display contains the same values linearly scaled to [-100, +100] for human-readable interpretation only. bias is threshold-calibrated on the val set to maximise accuracy. Score = sigmoid(b + sum(w_i * z_i)) * 100 where z_i = clip((x_i - mu_i)/sigma_i, -3, 3)."
+    "notes": "Weights are raw logistic regression coefficients. weights_display is linearly scaled to [-100, +100] for readability. bias is threshold-calibrated on the val set. Score = clip(b + sum(w_i * z_i), -3, +3)  where z_i = clip((x_i - mu_i)/sigma_i, -3, 3). Positive score = stressed, negative = calm, threshold at 0."
   },
   "priors": {
-    "HR": {
+    "HR_mean_30": {
       "mean": 75.505293,
       "std": 7.103462
     },
-    "HRV": {
+    "HR_std_30": {
+      "mean": 6.038158,
+      "std": 3.011028
+    },
+    "HR_slope_30": {
+      "mean": 0.0318,
+      "std": 6.668864
+    },
+    "HRV_30": {
       "mean": 74.444314,
       "std": 15.064097
     },
-    "UltraViolet": {
-      "mean": 0.025427,
-      "std": 0.091649
+    "HR_mean_5": {
+      "mean": 75.486085,
+      "std": 7.634185
     },
-    "Calorie": {
-      "mean": 30.792415,
-      "std": 117.766886
+    "HRV_5": {
+      "mean": 75.278643,
+      "std": 17.904106
     }
   },
   "weights": {
-    "HR": 0.062892,
-    "HRV": -0.016587,
-    "UltraViolet": -0.154969,
-    "Calorie": 0.060099
+    "HR_mean_30": -0.050231,
+    "HR_std_30": 0.000908,
+    "HR_slope_30": -0.070635,
+    "HRV_30": 0.004269,
+    "HR_mean_5": 0.089959,
+    "HRV_5": -0.05117
   },
   "weights_display": {
-    "HR": 40.5835,
-    "HRV": -10.7037,
-    "UltraViolet": -100.0,
-    "Calorie": 38.7813
+    "HR_mean_30": -55.8377,
+    "HR_std_30": 1.0093,
+    "HR_slope_30": -78.5187,
+    "HRV_30": 4.7458,
+    "HR_mean_5": 100.0,
+    "HRV_5": -56.881
   },
-  "bias": -5.060374
+  "bias": 0.010772
 }

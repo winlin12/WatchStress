@@ -85,18 +85,6 @@ final class VitalsViewModel: ObservableObject {
         }
     }
 
-    private func baselineStats(from samples: [HKQuantitySample], unit: HKUnit) -> ScoreEngine.BaselineStats? {
-        var acc = StatsAccumulator()
-        for sample in samples {
-            let value = sample.quantity.doubleValue(for: unit)
-            if value.isFinite {
-                acc.update(with: value)
-            }
-        }
-        guard acc.count >= 1 else { return nil }
-        return ScoreEngine.BaselineStats(count: acc.count, mean: acc.mean, stdDev: acc.stdDev)
-    }
-
     private func refreshHistoricalBaselinesIfNeeded(daysBack: Int = 7) async {
         guard authorized else { return }
 
@@ -110,63 +98,111 @@ final class VitalsViewModel: ObservableObject {
         guard let start = cal.date(byAdding: .day, value: -daysBack, to: Date()) else { return }
         let end = Date()
 
+        guard let hrType  = HKObjectType.quantityType(forIdentifier: .restingHeartRate),
+              let hrvType = HKObjectType.quantityType(forIdentifier: .heartRateVariabilitySDNN)
+        else { return }
+
+        let bpmUnit = HKUnit.count().unitDivided(by: .minute())
+        let msUnit  = HKUnit.secondUnit(with: .milli)
+
+        async let hrSamples  = hk.quantitySamples(for: hrType,  start: start, end: end)
+        async let hrvSamples = hk.quantitySamples(for: hrvType, start: start, end: end)
+        let (hrAll, hrvAll) = await (hrSamples, hrvSamples)
+
+        let hrVals  = hrAll.map  { $0.quantity.doubleValue(for: bpmUnit) }
+        let hrvVals = hrvAll.map { $0.quantity.doubleValue(for: msUnit)  }
+
         var baselines: [ScoreEngine.Feature: ScoreEngine.BaselineStats] = [:]
 
-        // Use resting heart rate for baseline to avoid workout spikes.
-        if let hrType = HKObjectType.quantityType(forIdentifier: .restingHeartRate) {
-            let samples = await hk.quantitySamples(for: hrType, start: start, end: end)
-            if let stats = baselineStats(from: samples, unit: HKUnit.count().unitDivided(by: .minute())) {
-                baselines[.HR] = stats
-            }
+        if let s = Self.makeBaselineStats(hrVals)  { baselines[.HR_mean_30] = s; baselines[.HR_mean_5] = s }
+        if let s = Self.makeBaselineStats(hrvVals) { baselines[.HRV_30] = s;     baselines[.HRV_5] = s     }
+
+        // HR_std_30 baseline: std of individual HR samples (proxy for within-window spread)
+        if hrVals.count >= 2 {
+            let mean = hrVals.reduce(0, +) / Double(hrVals.count)
+            let std  = (hrVals.map { ($0-mean)*($0-mean) }.reduce(0,+) / Double(hrVals.count-1)).squareRoot()
+            baselines[.HR_std_30] = ScoreEngine.BaselineStats(count: hrVals.count, mean: mean, stdDev: std)
         }
 
-        if let hrvType = HKObjectType.quantityType(forIdentifier: .heartRateVariabilitySDNN) {
-            let samples = await hk.quantitySamples(for: hrvType, start: start, end: end)
-            if let stats = baselineStats(from: samples, unit: HKUnit.secondUnit(with: .milli)) {
-                baselines[.HRV] = stats
-            }
-        }
-
-        var tempStats: ScoreEngine.BaselineStats?
-        if #available(iOS 16.0, *), let wristType = HKObjectType.quantityType(forIdentifier: .appleSleepingWristTemperature) {
-            let samples = await hk.quantitySamples(for: wristType, start: start, end: end)
-            tempStats = baselineStats(from: samples, unit: HKUnit.degreeCelsius())
-        }
-        if tempStats == nil, let bodyType = HKObjectType.quantityType(forIdentifier: .bodyTemperature) {
-            let samples = await hk.quantitySamples(for: bodyType, start: start, end: end)
-            tempStats = baselineStats(from: samples, unit: HKUnit.degreeCelsius())
-        }
-        if let tempStats {
-            baselines[.skinTemperature] = tempStats
-        }
-
-        if let stepType = HKObjectType.quantityType(forIdentifier: .stepCount) {
-            let samples = await hk.quantitySamples(for: stepType, start: start, end: end)
-            if let stats = baselineStats(from: samples, unit: HKUnit.count()) {
-                baselines[.stepCount] = stats
-            }
-        }
-
-        if let calType = HKObjectType.quantityType(forIdentifier: .activeEnergyBurned) {
-            let samples = await hk.quantitySamples(for: calType, start: start, end: end)
-            if let stats = baselineStats(from: samples, unit: HKUnit.kilocalorie()) {
-                baselines[.Calorie] = stats
-            }
-        }
-
-        if let distType = HKObjectType.quantityType(forIdentifier: .distanceWalkingRunning) {
-            let samples = await hk.quantitySamples(for: distType, start: start, end: end)
-            if let stats = baselineStats(from: samples, unit: HKUnit.meter()) {
-                baselines[.Distance] = stats
-            }
-        }
+        // HR_slope_30 baseline: near-zero slope is expected at rest
+        baselines[.HR_slope_30] = ScoreEngine.BaselineStats(count: 1, mean: 0.0, stdDev: 0.5)
 
         guard !baselines.isEmpty else { return }
         ScoreEngine.storeUserBaselines(baselines)
         defaults.set(currentDay, forKey: baselineRefreshKey)
     }
 
-    /// Loads last night's total sleep duration and formats as "Xh Ym".
+    private static func makeBaselineStats(_ vals: [Double]) -> ScoreEngine.BaselineStats? {
+        guard vals.count >= 1 else { return nil }
+        var acc = StatsAccumulator()
+        vals.forEach { acc.update(with: $0) }
+        return ScoreEngine.BaselineStats(count: acc.count, mean: acc.mean, stdDev: acc.stdDev)
+    }
+
+    // MARK: - Score sample computation
+
+    /// Builds a FeatureSample by querying HR and HRV from HealthKit over the
+    /// last 30-min and 5-min windows ending at `asOf`.
+    /// Call this right before invoking ScoreEngine.computeScore(sample:).
+    func computeScoreSample(asOf now: Date = Date()) async -> ScoreEngine.FeatureSample {
+        guard let hrType  = HKObjectType.quantityType(forIdentifier: .heartRate),
+              let hrvType = HKObjectType.quantityType(forIdentifier: .heartRateVariabilitySDNN)
+        else { return ScoreEngine.FeatureSample() }
+
+        let bpmUnit = HKUnit.count().unitDivided(by: .minute())
+        let msUnit  = HKUnit.secondUnit(with: .milli)
+
+        let w30start = now.addingTimeInterval(-30 * 60)
+        let w5start  = now.addingTimeInterval(-5  * 60)
+
+        async let hrSamples30  = hk.quantitySamples(for: hrType,  start: w30start, end: now)
+        async let hrSamples5   = hk.quantitySamples(for: hrType,  start: w5start,  end: now)
+        async let hrvSamples30 = hk.quantitySamples(for: hrvType, start: w30start, end: now)
+        async let hrvSamples5  = hk.quantitySamples(for: hrvType, start: w5start,  end: now)
+
+        let (hr30, hr5, hrv30, hrv5) = await (hrSamples30, hrSamples5, hrvSamples30, hrvSamples5)
+
+        let bpms30 = hr30.map  { $0.quantity.doubleValue(for: bpmUnit) }
+        let bpms5  = hr5.map   { $0.quantity.doubleValue(for: bpmUnit) }
+        let times30 = hr30.map { $0.startDate.timeIntervalSince1970 }
+
+        return ScoreEngine.FeatureSample(
+            HR_mean_30:  Self.windowMean(bpms30),
+            HR_std_30:   Self.windowStd(bpms30),
+            HR_slope_30: Self.windowSlope(times: times30, values: bpms30),
+            HRV_30:      hrvSamples30Last(hrv30, unit: msUnit),
+            HR_mean_5:   Self.windowMean(bpms5),
+            HRV_5:       hrvSamples30Last(hrv5,  unit: msUnit)
+        )
+    }
+
+    private func hrvSamples30Last(_ samples: [HKQuantitySample], unit: HKUnit) -> Double? {
+        samples.last.map { $0.quantity.doubleValue(for: unit) }
+    }
+
+    private static func windowMean(_ vals: [Double]) -> Double? {
+        guard !vals.isEmpty else { return nil }
+        return vals.reduce(0, +) / Double(vals.count)
+    }
+
+    private static func windowStd(_ vals: [Double]) -> Double? {
+        guard vals.count >= 2 else { return nil }
+        let mean = vals.reduce(0, +) / Double(vals.count)
+        let variance = vals.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / Double(vals.count - 1)
+        return variance.squareRoot()
+    }
+
+    /// Ordinary least-squares slope in bpm/min.
+    private static func windowSlope(times: [Double], values: [Double]) -> Double? {
+        guard times.count >= 3, times.count == values.count else { return nil }
+        let n = Double(times.count)
+        let meanT = times.reduce(0, +) / n
+        let meanV = values.reduce(0, +) / n
+        let num = zip(times, values).map { ($0 - meanT) * ($1 - meanV) }.reduce(0, +)
+        let den = times.map { ($0 - meanT) * ($0 - meanT) }.reduce(0, +)
+        guard den > 0 else { return nil }
+        return (num / den) * 60.0   // convert per-second → per-minute
+    }
     private func loadSleep() async {
         await withCheckedContinuation { continuation in
             hk.lastNightSleepDuration { [weak self] duration in

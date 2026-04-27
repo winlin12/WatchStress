@@ -2,19 +2,19 @@
   "meta": {
     "source": "K-EmoPhone (EMO)",
     "split": {
-      "train": 50,
+      "train": 47,
       "val": 20,
-      "test": 7
+      "test": 10
     },
     "n_samples": {
-      "train": 2608,
-      "val": 1077,
-      "test": 377
+      "train": 2374,
+      "val": 1179,
+      "test": 509
     },
     "accuracy": {
-      "train": 0.6308,
-      "val": 0.662,
-      "test": 0.6764
+      "train": 0.532,
+      "val": 0.4835,
+      "test": 0.5403
     },
     "window_min": 30,
     "l2": 1.0,
@@ -23,63 +23,56 @@
       "baseline": "ESM stress <= 0"
     },
     "features": [
-      "HR",
-      "HRV",
-      "skinTemperature",
-      "UltraViolet",
-      "stepCount",
-      "Calorie",
-      "Distance"
+      "HR_mean_30",
+      "HR_std_30",
+      "HR_slope_30",
+      "HRV_30",
+      "HR_mean_5",
+      "HRV_5"
     ],
-    "notes": "weights contains raw logistic regression coefficients (not rescaled). weights_display contains the same values linearly scaled to [-100, +100] for human-readable interpretation only. Score = sigmoid(b + sum(w_i * z_i)) * 100 where z_i = clip((x_i - mu_i)/sigma_i, -3, 3)."
+    "notes": "Weights are raw logistic regression coefficients. weights_display is linearly scaled to [-100, +100] for readability. bias is threshold-calibrated on the val set. Score = clip(b + sum(w_i * z_i), -3, +3)  where z_i = clip((x_i - mu_i)/sigma_i, -3, 3). Positive score = stressed, negative = calm, threshold at 0."
   },
   "priors": {
-    "HR": {
-      "mean": 75.799037,
-      "std": 7.016697
+    "HR_mean_30": {
+      "mean": 75.505293,
+      "std": 7.103462
     },
-    "HRV": {
-      "mean": 69.574095,
-      "std": 11.529691
+    "HR_std_30": {
+      "mean": 6.038158,
+      "std": 3.011028
     },
-    "skinTemperature": {
-      "mean": 32.475552,
-      "std": 1.656109
+    "HR_slope_30": {
+      "mean": 0.0318,
+      "std": 6.668864
     },
-    "UltraViolet": {
-      "mean": 0.025315,
-      "std": 0.090567
+    "HRV_30": {
+      "mean": 74.444314,
+      "std": 15.064097
     },
-    "stepCount": {
-      "mean": 313.647486,
-      "std": 560.849122
+    "HR_mean_5": {
+      "mean": 75.486085,
+      "std": 7.634185
     },
-    "Calorie": {
-      "mean": 31.801333,
-      "std": 112.468417
-    },
-    "Distance": {
-      "mean": 23986.717141,
-      "std": 43445.689561
+    "HRV_5": {
+      "mean": 75.278643,
+      "std": 17.904106
     }
   },
   "weights": {
-    "HR": 0.093021,
-    "HRV": -0.024568,
-    "skinTemperature": -0.154162,
-    "UltraViolet": -0.054937,
-    "stepCount": -0.042234,
-    "Calorie": 0.368134,
-    "Distance": -0.255667
+    "HR_mean_30": 0.043355,
+    "HR_std_30": -0.050825,
+    "HR_slope_30": -0.084727,
+    "HRV_30": 0.037936,
+    "HR_mean_5": 0.002951,
+    "HRV_5": -0.098608
   },
   "weights_display": {
-    "HR": 25.2682,
-    "HRV": -6.6736,
-    "skinTemperature": -41.8767,
-    "UltraViolet": -14.9232,
-    "stepCount": -11.4725,
-    "Calorie": 100.0,
-    "Distance": -69.4495
+    "HR_mean_30": 43.967,
+    "HR_std_30": -51.543,
+    "HR_slope_30": -85.9229,
+    "HRV_30": 38.4716,
+    "HR_mean_5": 2.9931,
+    "HRV_5": -100.0
   },
-  "bias": -0.598704
+  "bias": -0.007028
 }

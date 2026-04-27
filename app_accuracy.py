@@ -6,18 +6,19 @@ Full training → validation → testing pipeline that also generates priors.jso
 
 Pipeline
 --------
-  PART 1 (train)   47 subjects  →  fit logistic regression on 7 base features
+    PART 1 (train)   47 subjects  →  fit logistic/linear regression on base features
                                    compute priors (μ/σ) from baseline samples
                                    write priors.json  (ScoreEngine.swift compatible)
   PART 2 (compare) optional     →  train RF or XGBoost on engineered features
                                    for side-by-side accuracy comparison
-  PART 3 (test)    10 subjects  →  score with app logistic model, per-subject report
-                                   this is the *theoretical app accuracy*
+    PART 3 (test)    10 subjects  →  score with app regression model, per-subject report
+                                   % calm in test set (66.2 % of people are calm)
 
-Scoring (mirrors ScoreEngine.swift exactly):
-  z_i   = clip((x_i - μ_i) / σ_i, -3, +3)
-  score = sigmoid(b + Σ w_i·z_i) × 100
-  label = stressed  if score < 50  else  calm
+Scoring (for app model):
+    z_i   = clip((x_i - μ_i) / σ_i, -3, +3)
+    logistic: score = sigmoid(b + Σ w_i·z_i) × 100
+    linear:   score = clip(b + Σ w_i·z_i, 0, 1) × 100
+    label = stressed if score >= 50 else calm
 
 Usage
 -----
@@ -50,17 +51,11 @@ try:
     from sklearn.metrics import classification_report
     from sklearn.feature_selection import mutual_info_classif
     from sklearn.inspection import permutation_importance as sklearn_perm_importance
+    from sklearn.svm import SVC
     _SKLEARN_AVAILABLE = True
 except ImportError:
     _SKLEARN_AVAILABLE = False
     print("[warn] scikit-learn not found — Random Forest unavailable.", file=sys.stderr)
-
-try:
-    from xgboost import XGBClassifier
-    _XGB_AVAILABLE = True
-except ImportError:
-    _XGB_AVAILABLE = False
-    print("[warn] xgboost not found — XGBoost unavailable.  pip install xgboost", file=sys.stderr)
 
 try:
     from scipy.stats import mannwhitneyu
@@ -81,20 +76,13 @@ except ImportError:
 # ─────────────────────────────────────────────────────────────────────────────
 
 FEATURE_NAMES: List[str] = [
-    "HR",
-    "HRV",
-    "UltraViolet",
-    "Calorie",
+    "HR_mean_30",   # mean HR over 30-min window
+    "HR_std_30",    # std dev of HR over 30-min window
+    "HR_slope_30",  # linear slope of HR over 30-min window (bpm/min)
+    "HRV_30",       # RMSSD over 30-min window
+    "HR_mean_5",    # mean HR over 5-min window (closer to ESM response)
+    "HRV_5",        # RMSSD over 5-min window
 ]
-
-UV_MAP: Dict[str, float] = {
-    "NONE": 0.0,
-    "LOW": 1.0,
-    "MODERATE": 2.0,
-    "HIGH": 3.0,
-    "VERY_HIGH": 4.0,
-    "EXTREME": 5.0,
-}
 
 WINDOW_DEFAULT_MIN = 30
 Z_CLAMP = 3.0   # ScoreEngine clamps z-scores to ±3
@@ -148,18 +136,6 @@ def load_subject_data(subj_dir: str) -> Dict[str, np.ndarray]:
 
     _load_sorted("HR.csv", "bpm")
     _load_sorted("RRI.csv", "interval")
-    _load_sorted("Calorie.csv", "caloriesToday")
-
-    # UV needs string-to-float mapping before storing
-    uv_df = load_csv_safe(os.path.join(subj_dir, "UltraViolet.csv"))
-    if uv_df is not None:
-        uv_df = uv_df.sort_values("timestamp")
-        d["UltraViolet.csv_ts"] = uv_df["timestamp"].values.astype(np.int64)
-        d["UltraViolet.csv_intensity"] = (
-            uv_df["intensity"]
-            .map(lambda s: UV_MAP.get(str(s).strip().upper(), 0.0))
-            .values.astype(float)
-        )
 
     return d
 
@@ -185,6 +161,34 @@ def _window_rmssd(ts: np.ndarray, vals: np.ndarray, t0s: np.ndarray, t1s: np.nda
     return out
 
 
+def _window_std(ts, vals, t0s, t1s, min_count=3):
+    """Std dev of vals in [t0, t1]. Returns nan where count < min_count."""
+    out = np.full(len(t0s), np.nan)
+    for i in range(len(t0s)):
+        lo = np.searchsorted(ts, t0s[i])
+        hi = np.searchsorted(ts, t1s[i], side="right")
+        if hi - lo >= min_count:
+            out[i] = vals[lo:hi].std()
+    return out
+
+
+def _window_slope(ts, vals, t0s, t1s, min_count=5):
+    """Linear slope (units/ms) of vals vs time in [t0, t1].
+    Returns nan where count < min_count."""
+    out = np.full(len(t0s), np.nan)
+    for i in range(len(t0s)):
+        lo = np.searchsorted(ts, t0s[i])
+        hi = np.searchsorted(ts, t1s[i], side="right")
+        if hi - lo >= min_count:
+            t = ts[lo:hi].astype(float)
+            v = vals[lo:hi]
+            t_c = t - t.mean()
+            denom = float(np.dot(t_c, t_c))
+            if denom > 0:
+                out[i] = float(np.dot(t_c, v) / denom) * 60000  # convert to per-minute
+    return out
+
+
 def _window_cumulative_delta(ts: np.ndarray, vals: np.ndarray,
                               t0s: np.ndarray, t1s: np.ndarray) -> np.ndarray:
     """vals[-1] - vals[0] within [t0, t1]. Returns nan where fewer than 2 points."""
@@ -200,28 +204,33 @@ def _window_cumulative_delta(ts: np.ndarray, vals: np.ndarray,
 def extract_features_batch(
     data: Dict[str, np.ndarray],
     timestamps_ms: np.ndarray,
-    window_ms: int,
+    window_ms: int,   # kept for API compat, not used (we use fixed windows below)
 ) -> np.ndarray:
-    """Return (N, 4) feature matrix for all N ESM timestamps at once.
-    Features: HR, HRV (RMSSD), UltraViolet, Calorie."""
-    t0s = timestamps_ms - window_ms
-    t1s = timestamps_ms
+    """Return (N, 6) feature matrix. Two windows: 30-min and 5-min."""
+    W30 = 30 * 60 * 1000
+    W5  =  5 * 60 * 1000
     n   = len(timestamps_ms)
     X   = np.full((n, len(FEATURE_NAMES)), np.nan)
 
     if "HR.csv_ts" in data:
-        X[:, 0] = _window_mean(data["HR.csv_ts"], data["HR.csv_bpm"], t0s, t1s, min_count=3)
+        hr_ts  = data["HR.csv_ts"]
+        hr_bpm = data["HR.csv_bpm"]
+        t0_30 = timestamps_ms - W30
+        t0_5  = timestamps_ms - W5
+
+        X[:, 0] = _window_mean(hr_ts, hr_bpm, t0_30, timestamps_ms, min_count=3)
+        X[:, 1] = _window_std(hr_ts, hr_bpm, t0_30, timestamps_ms, min_count=3)
+        X[:, 2] = _window_slope(hr_ts, hr_bpm, t0_30, timestamps_ms, min_count=5)
+        X[:, 4] = _window_mean(hr_ts, hr_bpm, t0_5,  timestamps_ms, min_count=2)
+
     if "RRI.csv_ts" in data:
-        X[:, 1] = _window_rmssd(data["RRI.csv_ts"], data["RRI.csv_interval"], t0s, t1s)
-    # UV defaults to 0.0 (NONE) when no reading in window
-    X[:, 2] = 0.0
-    if "UltraViolet.csv_ts" in data:
-        uv = _window_mean(data["UltraViolet.csv_ts"], data["UltraViolet.csv_intensity"], t0s, t1s)
-        X[:, 2] = np.where(np.isfinite(uv), uv, 0.0)
-    if "Calorie.csv_ts" in data:
-        X[:, 3] = _window_cumulative_delta(
-            data["Calorie.csv_ts"], data["Calorie.csv_caloriesToday"], t0s, t1s
-        )
+        rri_ts  = data["RRI.csv_ts"]
+        rri_val = data["RRI.csv_interval"]
+        t0_30 = timestamps_ms - W30
+        t0_5  = timestamps_ms - W5
+
+        X[:, 3] = _window_rmssd(rri_ts, rri_val, t0_30, timestamps_ms)
+        X[:, 5] = _window_rmssd(rri_ts, rri_val, t0_5,  timestamps_ms)
 
     return X
 
@@ -322,15 +331,55 @@ def impute(X_train: np.ndarray, *extras: np.ndarray) -> Tuple[np.ndarray, ...]:
 
 
 def standardise(X: np.ndarray, priors: Dict) -> np.ndarray:
-    """
-    Standardise X using the priors dict loaded from priors.json.
-    Mirrors ScoreEngine.swift: z = clip((x - mu) / sigma, -3, +3)
-    """
+    """Standardise X using a priors dict: z = clip((x - mu) / sigma, -3, +3)."""
     Xz = np.zeros_like(X)
     for j, name in enumerate(FEATURE_NAMES):
         mu = priors[name]["mean"]
         sd = priors[name]["std"]
         Xz[:, j] = np.clip((X[:, j] - mu) / (sd + 1e-9), -Z_CLAMP, Z_CLAMP)
+    return Xz
+
+
+def compute_personal_priors(
+    X: np.ndarray,
+    y: np.ndarray,
+    sids: List[str],
+    min_calm: int = 3,
+) -> Dict[str, Dict]:
+    """Compute per-subject priors from each subject's own calm (label=0) samples.
+    Subjects with fewer than min_calm calm samples are skipped (caller falls
+    back to population priors for those subjects)."""
+    personal: Dict[str, Dict] = {}
+    for sid in sorted(set(sids)):
+        idx = [i for i, s in enumerate(sids) if s == sid and y[i] == 0]
+        if len(idx) < min_calm:
+            continue
+        subj_priors: Dict = {}
+        for j, name in enumerate(FEATURE_NAMES):
+            vals = X[idx, j]
+            vals = vals[np.isfinite(vals)]
+            mu = float(np.mean(vals)) if len(vals) > 0 else 0.0
+            sd = float(np.std(vals, ddof=1)) if len(vals) > 1 else 1.0
+            subj_priors[name] = {"mean": round(mu, 6), "std": round(max(sd, 1e-6), 6)}
+        personal[sid] = subj_priors
+    return personal
+
+
+def standardise_personal(
+    X: np.ndarray,
+    sids: List[str],
+    personal_priors: Dict[str, Dict],
+    fallback_priors: Dict,
+) -> np.ndarray:
+    """Per-row standardisation: each row uses that subject's personal priors,
+    falling back to population priors for subjects without enough calm data."""
+    Xz = np.zeros_like(X)
+    for i, sid in enumerate(sids):
+        priors = personal_priors.get(sid, fallback_priors)
+        for j, name in enumerate(FEATURE_NAMES):
+            mu = priors[name]["mean"]
+            sd = priors[name]["std"]
+            Xz[i, j] = np.clip((X[i, j] - mu) / (sd + 1e-9), -Z_CLAMP, Z_CLAMP)
     return Xz
 
 
@@ -433,134 +482,22 @@ def fit_logistic(X, y, l2=1.0, use_gpu=True, epochs=2000, lr=0.05, device="cpu")
         return fit_logistic_torch(X, y, l2=l2, epochs=epochs, lr=lr, device=device)
     return fit_logistic_numpy(X, y, l2=l2)
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Random Forest (scikit-learn)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def fit_random_forest(
+def fit_linear_ridge(
     X: np.ndarray,
     y: np.ndarray,
-    n_estimators: int = 500,
-    max_depth: Optional[int] = None,
-    min_samples_leaf: int = 5,
-) -> "RandomForestClassifier":
-    if not _SKLEARN_AVAILABLE:
-        sys.exit("[error] scikit-learn is required for --model rf.  pip install scikit-learn")
-    clf = RandomForestClassifier(
-        n_estimators=n_estimators,
-        max_depth=max_depth,
-        min_samples_leaf=min_samples_leaf,
-        class_weight="balanced",   # handles stressed/calm imbalance
-        n_jobs=-1,                 # use all CPU cores
-        random_state=42,
-    )
-    clf.fit(X, y)
-    return clf
-
-
-def rf_accuracy(clf: "RandomForestClassifier", X: np.ndarray, y: np.ndarray) -> float:
-    return float(np.mean(clf.predict(X) == y))
-
-
-def rf_per_subject_accuracy(
-    clf: "RandomForestClassifier",
-    X: np.ndarray,
-    y: np.ndarray,
-    sids: List[str],
-) -> Dict[str, Dict]:
-    preds = clf.predict(X)
-    results = {}
-    for sid in sorted(set(sids)):
-        idx = [i for i, s in enumerate(sids) if s == sid]
-        ys, ps = y[idx], preds[idx]
-        n_stressed = int(ys.sum())
-        results[sid] = {
-            "n_samples": len(ys),
-            "n_stressed": n_stressed,
-            "n_calm": len(ys) - n_stressed,
-            "accuracy": float(np.mean(ps == ys)),
-        }
-    return results
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Feature engineering
-# ─────────────────────────────────────────────────────────────────────────────
-
-# Indices into the raw 7-feature vector
-_HR, _HRV, _UV, _CAL = range(4)
-
-ENGINEERED_NAMES: List[str] = [
-    "hr_hrv_ratio",   # high HR + low HRV = classic stress marker
-    "hrv_hr_product", # joint autonomic balance signal
-]
-
-
-def engineer_features(X: np.ndarray) -> np.ndarray:
-    """
-    Append 2 derived features to the raw 3-column matrix.
-    NaN-safe: division where denominator is 0 stays NaN.
-    Returns shape (N, 5).
-    """
-    n = X.shape[0]
-    feats = np.full((n, len(ENGINEERED_NAMES)), np.nan)
-
-    hr  = X[:, _HR]
-    hrv = X[:, _HRV]
-
-    with np.errstate(divide="ignore", invalid="ignore"):
-        feats[:, 0] = np.where(hrv > 0, hr / hrv, np.nan)  # hr_hrv_ratio
-        feats[:, 1] = hr * hrv                               # hrv_hr_product
-
-    return np.hstack([X, feats])
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# XGBoost
-# ─────────────────────────────────────────────────────────────────────────────
-
-def fit_xgboost(
-    X_train: np.ndarray,
-    y_train: np.ndarray,
-    X_val: np.ndarray,
-    y_val: np.ndarray,
-    n_estimators: int = 600,
-    max_depth: int = 4,
-    lr: float = 0.05,
-    device: str = "cpu",
-) -> "XGBClassifier":
-    if not _XGB_AVAILABLE:
-        sys.exit("[error] xgboost is required for --model xgb.  pip install xgboost")
-
-    # Balance classes
-    n_calm    = int((y_train == 0).sum())
-    n_stressed = int((y_train == 1).sum())
-    scale_pos = n_calm / max(n_stressed, 1)
-
-    xgb_device = "cuda" if device == "cuda" else "cpu"
-
-    clf = XGBClassifier(
-        n_estimators=n_estimators,
-        max_depth=max_depth,
-        learning_rate=lr,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        scale_pos_weight=scale_pos,
-        eval_metric="logloss",
-        early_stopping_rounds=30,
-        device=xgb_device,
-        random_state=42,
-        verbosity=0,
-    )
-    clf.fit(
-        X_train, y_train,
-        eval_set=[(X_val, y_val)],
-        verbose=False,
-    )
-    print(f"  [xgb] Best iteration: {clf.best_iteration}  "
-          f"val-logloss: {clf.best_score:.4f}  device: {xgb_device}")
-    return clf
+    l2: float = 1.0,
+) -> Tuple[np.ndarray, float]:
+    """Simple ridge linear regression: y_hat = Xw + b."""
+    n, d = X.shape
+    Xa = np.hstack([X, np.ones((n, 1), dtype=float)])
+    reg = np.eye(d + 1, dtype=float)
+    reg[-1, -1] = 0.0  # do not regularise bias
+    A = Xa.T @ Xa + l2 * reg
+    rhs = Xa.T @ y.astype(float)
+    beta = np.linalg.solve(A, rhs)
+    w = beta[:-1]
+    b = float(beta[-1])
+    return w, b
 
 
 def scale_weights_0_100(w: np.ndarray) -> np.ndarray:
@@ -804,24 +741,24 @@ def get_device(no_gpu: bool = False) -> str:
     return "cpu"
 
 
-def _infer(X: np.ndarray, w: np.ndarray, b: float, device: str) -> np.ndarray:
-    """Run sigmoid(Xw + b) on the given device. Returns a NumPy array of probabilities."""
-    if _TORCH_AVAILABLE:
-        dev = torch.device(device)
-        with torch.no_grad():
-            Xt = torch.tensor(X, dtype=torch.float32, device=dev)
-            wt = torch.tensor(w, dtype=torch.float32, device=dev)
-            bt = torch.tensor(b, dtype=torch.float32, device=dev)
-            probs = torch.sigmoid(Xt @ wt + bt)
-        return probs.cpu().numpy()
-    return sigmoid(X @ w + b)
+def _predict_score(
+    X: np.ndarray,
+    w: np.ndarray,
+    b: float,
+) -> np.ndarray:
+    """Return raw linear scores clipped to [-3, 3].
+    Positive = stressed, negative = calm. Threshold at 0."""
+    return np.clip(X @ w + b, -Z_CLAMP, Z_CLAMP)
 
 
 def compute_accuracy(
-    X: np.ndarray, y: np.ndarray, w: np.ndarray, b: float, device: str = "cpu"
+    X: np.ndarray,
+    y: np.ndarray,
+    w: np.ndarray,
+    b: float,
 ) -> float:
-    probs = _infer(X, w, b, device)
-    preds = (probs >= 0.5).astype(int)
+    scores = _predict_score(X, w, b)
+    preds = (scores > 0.0).astype(int)
     return float(np.mean(preds == y))
 
 
@@ -830,32 +767,31 @@ def calibrate_bias(
     y_val: np.ndarray,
     w: np.ndarray,
     b: float,
-    device: str = "cpu",
     search_range: float = 5.0,
     n_steps: int = 201,
 ) -> Tuple[float, float]:
-    """
-    Grid-search a bias offset that maximises val-set accuracy.
-
-    After class-balanced training the raw bias may not reflect the actual
-    class distribution.  This function finds the scalar δ that maximises
-    accuracy(sigmoid(Xz·w + b + δ) ≥ 0.5) on the val set.
-
-    Returns (calibrated_bias, val_accuracy_at_calibration).
-    If val set is empty, returns (b, nan) unchanged.
-    """
+    """Grid-search a bias offset that maximises Matthews Correlation Coefficient.
+    MCC = (TP·TN − FP·FN) / sqrt((TP+FP)(TP+FN)(TN+FP)(TN+FN))
+    MCC = 0 when all samples are predicted as one class, so it cannot be gamed
+    by a degenerate threshold the way accuracy or F-beta can.
+    Returns (calibrated_bias, MCC_at_calibration)."""
     if len(Xz_val) == 0 or len(y_val) == 0:
         return b, float("nan")
 
-    logits = Xz_val @ w  # (N,)   — computed once, offset added per δ
+    linear = Xz_val @ w
     deltas = np.linspace(-search_range, search_range, n_steps)
-    best_delta, best_acc = 0.0, -1.0
+    best_delta, best_mcc = 0.0, -2.0
     for delta in deltas:
-        preds = ((logits + b + delta) >= 0.0).astype(int)
-        acc = float(np.mean(preds == y_val))
-        if acc > best_acc:
-            best_acc, best_delta = acc, float(delta)
-    return b + best_delta, best_acc
+        preds = (np.clip(linear + b + delta, -Z_CLAMP, Z_CLAMP) > 0.0).astype(int)
+        tp = float(np.sum((y_val == 1) & (preds == 1)))
+        tn = float(np.sum((y_val == 0) & (preds == 0)))
+        fp = float(np.sum((y_val == 0) & (preds == 1)))
+        fn = float(np.sum((y_val == 1) & (preds == 0)))
+        denom = np.sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
+        mcc = (tp * tn - fp * fn) / (denom + 1e-9)
+        if mcc > best_mcc:
+            best_mcc, best_delta = mcc, float(delta)
+    return b + best_delta, best_mcc
 
 
 def per_subject_accuracy(
@@ -864,22 +800,36 @@ def per_subject_accuracy(
     sids: List[str],
     w: np.ndarray,
     b: float,
-    device: str = "cpu",
 ) -> Dict[str, Dict]:
     """Return accuracy and sample counts broken down by subject ID."""
-    probs = _infer(X, w, b, device)
-    preds = (probs >= 0.5).astype(int)
+    scores = _predict_score(X, w, b)
+    preds = (scores > 0.0).astype(int)
+
+    def _confusion_counts(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, int]:
+        tp = int(np.sum((y_true == 1) & (y_pred == 1)))
+        tn = int(np.sum((y_true == 0) & (y_pred == 0)))
+        fp = int(np.sum((y_true == 0) & (y_pred == 1)))
+        fn = int(np.sum((y_true == 1) & (y_pred == 0)))
+        return {
+            "true_stress": tp,
+            "true_calm": tn,
+            "false_stress": fp,
+            "false_calm": fn,
+        }
+
     results = {}
     for sid in sorted(set(sids)):
         idx = [i for i, s in enumerate(sids) if s == sid]
         ys = y[idx]
         ps = preds[idx]
         n_stressed = int(ys.sum())
+        c = _confusion_counts(ys, ps)
         results[sid] = {
             "n_samples": len(ys),
             "n_stressed": n_stressed,
             "n_calm": len(ys) - n_stressed,
             "accuracy": float(np.mean(ps == ys)),
+            **c,
         }
     return results
 
@@ -905,7 +855,7 @@ def main() -> None:
     ap.add_argument("--window_min", type=float, default=WINDOW_DEFAULT_MIN,
                     help="Lookback window in minutes before each ESM response (default: 30)")
     ap.add_argument("--l2", type=float, default=1.0,
-                    help="L2 regularisation for logistic regression (default: 1.0)")
+                    help="L2 regularisation strength for logistic regression (default: 1.0)")
     ap.add_argument("--n_train", type=int, default=47)
     ap.add_argument("--n_val",   type=int, default=20)
     ap.add_argument("--n_test",  type=int, default=10)
@@ -914,17 +864,6 @@ def main() -> None:
     ap.add_argument("--lr",      type=float, default=0.05)
     ap.add_argument("--workers", type=int, default=8,
                     help="Parallel threads for subject data loading (default: 8)")
-    ap.add_argument("--model", choices=["logistic", "rf", "xgb"], default="xgb",
-                    help="Additional comparison model: logistic, rf, or xgb (default: xgb). "
-                         "The app logistic model (for priors.json) is always trained.")
-    ap.add_argument("--n_estimators", type=int, default=600,
-                    help="Number of trees for RF/XGBoost (default: 600)")
-    ap.add_argument("--max_depth", type=int, default=None,
-                    help="Max tree depth for RF/XGBoost (default: None for RF, 4 for XGBoost)")
-    ap.add_argument("--engineer", action="store_true", default=True,
-                    help="Append engineered features for the comparison model — on by default")
-    ap.add_argument("--no_engineer", dest="engineer", action="store_false",
-                    help="Disable engineered features for the comparison model")
     args = ap.parse_args()
 
     # ── Device selection ─────────────────────────────────────────────────────
@@ -987,16 +926,8 @@ def main() -> None:
     # ── Impute NaNs (medians from training data only) ─────────────────────────
     X_train, X_val, X_test = impute(X_train, X_val, X_test)
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # PART 1: Train the app logistic model (7 base features → priors.json)
-    # Always runs regardless of --model, because ScoreEngine.swift uses
-    # logistic regression with z-score normalisation.
-    # ─────────────────────────────────────────────────────────────────────────
-    print("\n" + "=" * 60)
-    print("PART 1 — App logistic model  (7 base features → priors.json)")
-    print("=" * 60)
-
-    # Compute priors from baseline (non-stressed) training samples
+    # ── Population priors (calm training samples) — saved to priors.json ──────
+    # Used as cold-start fallback in the app before personal baseline accumulates.
     X_base = X_train[y_train == 0]
     app_priors: Dict[str, Dict] = {}
     for j, name in enumerate(FEATURE_NAMES):
@@ -1006,39 +937,57 @@ def main() -> None:
         sd = float(np.std(vals, ddof=1)) if len(vals) > 1 else 1.0
         app_priors[name] = {"mean": round(mu, 6), "std": round(max(sd, 1e-6), 6)}
 
+    # ── Per-person priors — used for all model training and evaluation ─────────
+    # Each subject's calm windows define their own baseline mu/sigma.
+    # Subjects with < 3 calm samples fall back to population priors.
+    pp_train = compute_personal_priors(X_train, y_train, sids_train)
+    pp_val   = compute_personal_priors(X_val,   y_val,   sids_val)
+    pp_test  = compute_personal_priors(X_test,  y_test,  sids_test)
+
+    n_personal = sum(1 for sids in [sids_train, sids_val, sids_test]
+                     for s in set(sids)
+                     if s in {**pp_train, **pp_val, **pp_test})
+    n_total_subj = len(set(sids_train) | set(sids_val) | set(sids_test))
+    print(f"\n  Personal priors: {n_personal}/{n_total_subj} subjects have ≥3 calm samples "
+          f"(rest fall back to population)")
+
+    Xz_train = standardise_personal(X_train, sids_train, pp_train, app_priors)
+    Xz_val   = standardise_personal(X_val,   sids_val,   pp_val,   app_priors)
+    Xz_test  = standardise_personal(X_test,  sids_test,  pp_test,  app_priors)
+
     # Standardise using app priors (mirrors ScoreEngine.swift)
-    Xz_train_app = standardise(X_train, app_priors)
-    Xz_val_app   = standardise(X_val,   app_priors)
-    Xz_test_app  = standardise(X_test,  app_priors)
+    # ─────────────────────────────────────────────────────────────────────────
+    # PART 1: Train the logistic regression model (personal normalization)
+    # priors.json gets population priors (cold-start). Training uses personal.
+    # ─────────────────────────────────────────────────────────────────────────
+    print("\n" + "=" * 60)
+    print(f"PART 1 — App logistic model  ({len(FEATURE_NAMES)} features, per-person z-scores)")
+    print("=" * 60)
 
     use_gpu = device == "cuda"
     if _TORCH_AVAILABLE and use_gpu:
         print(f"Fitting logistic regression (PyTorch, epochs={args.epochs}, lr={args.lr}) …")
     else:
         print("Fitting logistic regression (NumPy Newton-Raphson) …")
-
     w_app, b_app = fit_logistic(
-        Xz_train_app, y_train, l2=args.l2, use_gpu=use_gpu,
+        Xz_train, y_train, l2=args.l2, use_gpu=use_gpu,
         epochs=args.epochs, lr=args.lr, device=device,
     )
+    b_cal = b_app
 
-    # Calibrate decision threshold on val set: balanced training may push the
-    # raw bias away from the actual class distribution.  We grid-search a bias
-    # offset δ that maximises val-set accuracy, then store b_app + δ in
-    # priors.json.  Training weights are unchanged.
-    if len(X_val) > 0:
-        b_cal, acc_cal = calibrate_bias(Xz_val_app, y_val, w_app, b_app, device)
-        print(f"  [calibrate] bias {b_app:+.4f} → {b_cal:+.4f}  "
-              f"(val acc before: {compute_accuracy(Xz_val_app, y_val, w_app, b_app, device):.1%} "
-              f"→ after: {acc_cal:.1%})")
-    else:
-        b_cal = b_app
+    acc_train_app = compute_accuracy(Xz_train, y_train, w_app, b_cal)
+    acc_val_app   = compute_accuracy(Xz_val,   y_val,   w_app, b_cal) if len(X_val)  > 0 else float("nan")
+    acc_test_app  = compute_accuracy(Xz_test,  y_test,  w_app, b_cal) if len(X_test) > 0 else float("nan")
 
-    acc_train_app = compute_accuracy(Xz_train_app, y_train, w_app, b_cal, device)
-    acc_val_app   = compute_accuracy(Xz_val_app,   y_val,   w_app, b_cal, device) if len(X_val)  > 0 else float("nan")
-    acc_test_app  = compute_accuracy(Xz_test_app,  y_test,  w_app, b_cal, device) if len(X_test) > 0 else float("nan")
+    scores_train = np.clip(Xz_train @ w_app + b_cal, -Z_CLAMP, Z_CLAMP)
+    print(f"\n── Score diagnostics (train, personal z-scores) ──")
+    print(f"  Weights : {dict(zip(FEATURE_NAMES, [f'{v:+.4f}' for v in w_app]))}")
+    print(f"  Bias    : {b_cal:+.4f}")
+    print(f"  Score std : {scores_train.std():.4f}  (near-zero = no signal)")
+    print(f"  Predicted stressed % : {float(np.mean(scores_train > 0)):.1%}  "
+          f"(actual: {y_train.mean():.1%})")
 
-    print(f"\nLogistic (app model) accuracy:")
+    print(f"\nLogistic accuracy (per-person z-scores):")
     print(f"  Train  ({len(train_subj):2d} subj) : {acc_train_app:.1%}")
     print(f"  Val    ({len(val_subj):2d} subj) : {acc_val_app:.1%}")
     print(f"  Test   ({len(test_subj):2d} subj) : {acc_test_app:.1%}")
@@ -1048,7 +997,7 @@ def main() -> None:
     for name, ws, wr in zip(FEATURE_NAMES, w_scaled, w_app):
         direction = "↑ stress" if wr > 0 else "↓ stress"
         print(f"  {name:<20s}  {ws:+7.2f}  (raw: {wr:+.4f})  [{direction}]")
-    print(f"  {'bias':<20s}  {b_cal:+.4f}  (calibrated)")
+    print(f"  {'bias':<20s}  {b_cal:+.4f}")
 
     # ── Write priors.json ─────────────────────────────────────────────────────
     if args.out:
@@ -1078,12 +1027,11 @@ def main() -> None:
                 },
                 "features": FEATURE_NAMES,
                 "notes": (
-                    "weights contains raw logistic regression coefficients (not rescaled). "
-                    "weights_display contains the same values linearly scaled to [-100, +100] "
-                    "for human-readable interpretation only. "
-                    "bias is threshold-calibrated on the val set to maximise accuracy. "
-                    "Score = sigmoid(b + sum(w_i * z_i)) * 100 where "
-                    "z_i = clip((x_i - mu_i)/sigma_i, -3, 3)."
+                    "Weights are raw logistic regression coefficients. "
+                    "weights_display is linearly scaled to [-100, +100] for readability. "
+                    "bias is threshold-calibrated on the val set. "
+                    "Score = clip(b + sum(w_i * z_i), -3, +3)  where z_i = clip((x_i - mu_i)/sigma_i, -3, 3). "
+                    "Positive score = stressed, negative = calm, threshold at 0."
                 ),
             },
             "priors": app_priors,
@@ -1102,113 +1050,161 @@ def main() -> None:
         print(f"\n✓ Wrote {args.out}")
 
     # ─────────────────────────────────────────────────────────────────────────
-    # PART 2: Optional comparison model (RF or XGBoost, with engineered features)
-    # ─────────────────────────────────────────────────────────────────────────
-    acc_train_cmp = acc_val_cmp = acc_test_cmp = float("nan")
-
-    if args.model != "logistic":
-        # Build engineered feature matrices for the comparison model
-        if args.engineer:
-            X_train_m = engineer_features(X_train)
-            X_val_m   = engineer_features(X_val)
-            X_test_m  = engineer_features(X_test)
-            X_train_m, X_val_m, X_test_m = impute(X_train_m, X_val_m, X_test_m)
-            feat_names = FEATURE_NAMES + ENGINEERED_NAMES
-        else:
-            X_train_m, X_val_m, X_test_m = X_train, X_val, X_test
-            feat_names = FEATURE_NAMES
-
-        print("\n" + "=" * 60)
-        print(f"PART 2 — {args.model.upper()} comparison model  "
-              f"({len(feat_names)} features, {'engineered' if args.engineer else 'base only'})")
-        print("=" * 60)
-
-        if args.model == "rf":
-            print(f"Fitting Random Forest (n_estimators={args.n_estimators}, "
-                  f"max_depth={args.max_depth}, n_jobs=-1) …")
-            clf = fit_random_forest(
-                X_train_m, y_train,
-                n_estimators=args.n_estimators,
-                max_depth=args.max_depth,
-            )
-            acc_train_cmp = rf_accuracy(clf, X_train_m, y_train)
-            acc_val_cmp   = rf_accuracy(clf, X_val_m,   y_val)   if len(X_val)  > 0 else float("nan")
-            acc_test_cmp  = rf_accuracy(clf, X_test_m,  y_test)  if len(X_test) > 0 else float("nan")
-
-            print(f"\nRandom Forest accuracy:")
-            print(f"  Train  ({len(train_subj):2d} subj) : {acc_train_cmp:.1%}")
-            print(f"  Val    ({len(val_subj):2d} subj) : {acc_val_cmp:.1%}")
-            print(f"  Test   ({len(test_subj):2d} subj) : {acc_test_cmp:.1%}")
-
-            importances = clf.feature_importances_
-            print("\n── Feature importances (RF) ──")
-            for name, imp in sorted(zip(feat_names, importances), key=lambda x: -x[1]):
-                bar = "█" * int(imp * 40)
-                print(f"  {name:<22s}  {imp:.4f}  {bar}")
-
-            print(f"\n── Classification report (val set) ──")
-            print(classification_report(y_val, clf.predict(X_val_m),
-                                        target_names=["calm", "stressed"], digits=3))
-
-        elif args.model == "xgb":
-            max_d = args.max_depth if args.max_depth is not None else 4
-            print(f"Fitting XGBoost (n_estimators={args.n_estimators}, max_depth={max_d}, "
-                  f"lr={args.lr}, device={device}) …")
-            clf = fit_xgboost(
-                X_train_m, y_train,
-                X_val_m,   y_val,
-                n_estimators=args.n_estimators,
-                max_depth=max_d,
-                lr=args.lr,
-                device=device,
-            )
-            acc_train_cmp = rf_accuracy(clf, X_train_m, y_train)
-            acc_val_cmp   = rf_accuracy(clf, X_val_m,   y_val)   if len(X_val)  > 0 else float("nan")
-            acc_test_cmp  = rf_accuracy(clf, X_test_m,  y_test)  if len(X_test) > 0 else float("nan")
-
-            print(f"\nXGBoost accuracy:")
-            print(f"  Train  ({len(train_subj):2d} subj) : {acc_train_cmp:.1%}")
-            print(f"  Val    ({len(val_subj):2d} subj) : {acc_val_cmp:.1%}")
-            print(f"  Test   ({len(test_subj):2d} subj) : {acc_test_cmp:.1%}")
-
-            importances = clf.feature_importances_
-            print("\n── Feature importances (XGBoost) ──")
-            for name, imp in sorted(zip(feat_names, importances), key=lambda x: -x[1]):
-                bar = "█" * int(imp * 40)
-                print(f"  {name:<22s}  {imp:.4f}  {bar}")
-
-            print(f"\n── Classification report (val set) ──")
-            print(classification_report(y_val, clf.predict(X_val_m),
-                                        target_names=["calm", "stressed"], digits=3))
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # PART 3: Theoretical app accuracy — per-subject test breakdown
-    # Uses the logistic model trained in PART 1 (the model written to priors.json)
+    # PART 2: Comparison models — SVM, Random Forest, XGBoost, MLP
+    # Trained on train+val combined (no held-out val needed for calibration).
     # ─────────────────────────────────────────────────────────────────────────
     print("\n" + "=" * 60)
-    print("PART 3 — Theoretical app accuracy (test subjects, app logistic model)")
+    print("PART 2 — Comparison models  (SVM / RF / XGBoost / MLP)")
     print("=" * 60)
-    print("z_i = clip((x_i − μ_i) / σ_i, −3, +3)  [app priors]")
-    print("score = sigmoid(b + Σ w_i·z_i) × 100    [app weights]")
-    print("prediction = stressed if score < 50 else calm\n")
 
-    per_subj = per_subject_accuracy(Xz_test_app, y_test, sids_test, w_app, b_cal, device)
+    # Combine train + val for comparison models
+    clf_rf2 = None   # kept in scope so PART 3 / SUMMARY can reference it
+    Xz_trainval = np.vstack([Xz_train, Xz_val]) if len(Xz_val) > 0 else Xz_train
+    y_trainval  = np.concatenate([y_train, y_val])       if len(y_val)       > 0 else y_train
 
+    def _confusion_report(name: str, y_true: np.ndarray, y_pred: np.ndarray,
+                          acc_train: float, acc_test: float) -> None:
+        tp = int(np.sum((y_true == 1) & (y_pred == 1)))
+        tn = int(np.sum((y_true == 0) & (y_pred == 0)))
+        fp = int(np.sum((y_true == 0) & (y_pred == 1)))
+        fn = int(np.sum((y_true == 1) & (y_pred == 0)))
+        print(f"\n  {name}")
+        print(f"    Train acc : {acc_train:.1%}   Test acc : {acc_test:.1%}")
+        print(f"    TP={tp}  TN={tn}  FP={fp}  FN={fn}")
+
+    # ── SVM ──────────────────────────────────────────────────────────────────
+    try:
+        if not _SKLEARN_AVAILABLE:
+            raise ImportError("scikit-learn not available")
+        print("\n  [SVM] Training …")
+        clf_svm = SVC(kernel="rbf", class_weight="balanced", C=1.0, gamma="scale", random_state=42)
+        clf_svm.fit(Xz_trainval, y_trainval)
+        svm_train_acc = float(np.mean(clf_svm.predict(Xz_trainval) == y_trainval))
+        svm_preds     = clf_svm.predict(Xz_test)
+        svm_test_acc  = float(np.mean(svm_preds == y_test))
+        _confusion_report("SVM (RBF, C=1)", y_test, svm_preds, svm_train_acc, svm_test_acc)
+    except ImportError as e:
+        print(f"\n  [warn] SVM skipped: {e}")
+
+    # ── Random Forest ─────────────────────────────────────────────────────────
+    try:
+        if not _SKLEARN_AVAILABLE:
+            raise ImportError("scikit-learn not available")
+        print("\n  [RF] Training …")
+        clf_rf2 = RandomForestClassifier(
+            n_estimators=300, min_samples_leaf=5,
+            class_weight="balanced", n_jobs=-1, random_state=42,
+        )
+        clf_rf2.fit(Xz_trainval, y_trainval)
+        rf_train_acc = float(np.mean(clf_rf2.predict(Xz_trainval) == y_trainval))
+        rf_preds     = clf_rf2.predict(Xz_test)
+        rf_test_acc  = float(np.mean(rf_preds == y_test))
+        _confusion_report("Random Forest (300 trees)", y_test, rf_preds, rf_train_acc, rf_test_acc)
+    except ImportError as e:
+        print(f"\n  [warn] Random Forest skipped: {e}")
+
+    # ── XGBoost ───────────────────────────────────────────────────────────────
+    try:
+        from xgboost import XGBClassifier
+        print("\n  [XGB] Training …")
+        n_pos_tv = int(y_trainval.sum())
+        n_neg_tv = len(y_trainval) - n_pos_tv
+        scale_pos = n_neg_tv / max(n_pos_tv, 1)
+        clf_xgb = XGBClassifier(
+            n_estimators=300, max_depth=4, learning_rate=0.05,
+            scale_pos_weight=scale_pos,
+            eval_metric="logloss", random_state=42, verbosity=0,
+        )
+        clf_xgb.fit(Xz_trainval, y_trainval)
+        xgb_train_acc = float(np.mean(clf_xgb.predict(Xz_trainval) == y_trainval))
+        xgb_preds     = clf_xgb.predict(Xz_test)
+        xgb_test_acc  = float(np.mean(xgb_preds == y_test))
+        _confusion_report("XGBoost (300 trees, depth=4)", y_test, xgb_preds, xgb_train_acc, xgb_test_acc)
+    except ImportError:
+        print("\n  [warn] XGBoost skipped — not installed.  pip install xgboost")
+
+    # ── MLP (PyTorch) ─────────────────────────────────────────────────────────
+    try:
+        if not _TORCH_AVAILABLE:
+            raise ImportError("PyTorch not installed")
+        print("\n  [MLP] Training (PyTorch, 500 epochs, Adam lr=0.01) …")
+        _dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        Xt_tv  = torch.tensor(Xz_trainval, dtype=torch.float32, device=_dev)
+        yt_tv  = torch.tensor(y_trainval,  dtype=torch.float32, device=_dev)
+        Xt_te  = torch.tensor(Xz_test, dtype=torch.float32, device=_dev)
+
+        n_in = Xz_trainval.shape[1]
+        mlp = nn.Sequential(
+            nn.Linear(n_in, 32), nn.ReLU(),
+            nn.Linear(32, 16),   nn.ReLU(),
+            nn.Linear(16, 1),
+        ).to(_dev)
+
+        n_pos_tv = int((y_trainval == 1).sum())
+        n_neg_tv = len(y_trainval) - n_pos_tv
+        pos_w_tv = torch.tensor([n_neg_tv / max(n_pos_tv, 1)], dtype=torch.float32, device=_dev)
+        bce_mlp  = nn.BCEWithLogitsLoss(pos_weight=pos_w_tv)
+        opt_mlp  = torch.optim.Adam(mlp.parameters(), lr=0.01)
+
+        mlp.train()
+        for _ep in range(500):
+            opt_mlp.zero_grad()
+            loss_mlp = bce_mlp(mlp(Xt_tv).squeeze(1), yt_tv)
+            loss_mlp.backward()
+            opt_mlp.step()
+
+        mlp.eval()
+        with torch.no_grad():
+            mlp_train_preds = (torch.sigmoid(mlp(Xt_tv).squeeze(1)) >= 0.5).cpu().numpy().astype(int)
+            mlp_test_preds  = (torch.sigmoid(mlp(Xt_te).squeeze(1)) >= 0.5).cpu().numpy().astype(int)
+        mlp_train_acc = float(np.mean(mlp_train_preds == y_trainval))
+        mlp_test_acc  = float(np.mean(mlp_test_preds  == y_test))
+        _confusion_report("MLP (32→16→1, ReLU, BCE, 500 ep)", y_test, mlp_test_preds,
+                          mlp_train_acc, mlp_test_acc)
+    except ImportError as e:
+        print(f"\n  [warn] MLP skipped: {e}")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # PART 3: Per-subject score breakdown on test set
+    # Score = clip(b + Σ w_i·z_i, -3, +3). Positive = stressed, threshold at 0.
+    # ─────────────────────────────────────────────────────────────────────────
+    print("\n" + "=" * 60)
+    print("PART 3 — Per-subject test breakdown  (Random Forest)")
+    print("=" * 60)
+
+    if clf_rf2 is not None:
+        rf_preds_all = clf_rf2.predict(Xz_test)
+        primary_preds = rf_preds_all
+        primary_acc   = float(np.mean(primary_preds == y_test))
+        model_label   = "RF"
+    else:
+        scores_test   = _predict_score(Xz_test, w_app, b_cal)
+        primary_preds = (scores_test > 0.0).astype(int)
+        primary_acc   = acc_test_app
+        model_label   = "Logistic"
+
+    # Per-subject breakdown
+    sids_arr = np.array(sids_test)
     print(f"{'Subject':<10} {'Samples':>8} {'Stressed':>9} {'Calm':>6} {'Accuracy':>10}")
     print("-" * 46)
-    for sid, stats in per_subj.items():
-        print(f"  {sid:<8} {stats['n_samples']:>8} {stats['n_stressed']:>9} "
-              f"{stats['n_calm']:>6} {stats['accuracy']:>9.1%}")
+    for sid in sorted(set(sids_test)):
+        mask = sids_arr == sid
+        y_s, p_s = y_test[mask], primary_preds[mask]
+        print(f"  {sid:<8} {mask.sum():>8} {int(y_s.sum()):>9} "
+              f"{int((y_s==0).sum()):>6} {float(np.mean(p_s==y_s)):>9.1%}")
     print("-" * 46)
     print(f"  {'OVERALL':<8} {len(y_test):>8} {int(y_test.sum()):>9} "
-          f"{len(y_test)-int(y_test.sum()):>6} {acc_test_app:>9.1%}")
+          f"{len(y_test)-int(y_test.sum()):>6} {primary_acc:>9.1%}")
+
+    tp = int(np.sum((y_test == 1) & (primary_preds == 1)))
+    tn = int(np.sum((y_test == 0) & (primary_preds == 0)))
+    fp = int(np.sum((y_test == 0) & (primary_preds == 1)))
+    fn = int(np.sum((y_test == 1) & (primary_preds == 0)))
+    print(f"\nConfusion counts ({model_label}):")
+    print(f"  TP={tp}  TN={tn}  FP={fp}  FN={fn}")
 
     majority_acc = max(float(y_test.mean()), 1.0 - float(y_test.mean()))
-    lift = acc_test_app - majority_acc
-    print(f"\n  Majority-class baseline  : {majority_acc:.1%}")
-    print(f"  App logistic model       : {acc_test_app:.1%}")
-    print(f"  Lift over baseline       : {lift:+.1%}")
-
+    lift = primary_acc - majority_acc
     # ── Optional: compare against an externally supplied priors.json ──────────
     if args.priors:
         if not os.path.exists(args.priors):
@@ -1220,7 +1216,7 @@ def main() -> None:
             ext_weights = np.array([ext_model["weights"][n] for n in FEATURE_NAMES], dtype=float)
             ext_bias    = float(ext_model["bias"])
             Xz_test_ext = standardise(X_test, ext_priors)
-            ext_acc = compute_accuracy(Xz_test_ext, y_test, ext_weights, ext_bias, device)
+            ext_acc = compute_accuracy(Xz_test_ext, y_test, ext_weights, ext_bias)
             ext_lift = ext_acc - majority_acc
             print(f"\n── External model ({args.priors}) ──")
             print(f"  Accuracy on test set     : {ext_acc:.1%}")
@@ -1234,18 +1230,11 @@ def main() -> None:
     print(f"  Validation subjects           : {len(val_subj)}")
     print(f"  Test subjects                 : {len(test_subj)}")
     print()
-    print(f"  App logistic — train acc      : {acc_train_app:.1%}")
-    print(f"  App logistic — val acc        : {acc_val_app:.1%}")
-    print(f"  App logistic — test acc       : {acc_test_app:.1%}  ← THEORETICAL APP ACCURACY")
-    if args.model != "logistic" and not (
-        acc_train_cmp != acc_train_cmp  # nan check
-    ):
-        print(f"\n  {args.model.upper():<10} comparison — train : {acc_train_cmp:.1%}")
-        print(f"  {args.model.upper():<10} comparison — val   : {acc_val_cmp:.1%}")
-        print(f"  {args.model.upper():<10} comparison — test  : {acc_test_cmp:.1%}")
+    print(f"  Primary model ({model_label}) — test acc   : {primary_acc:.1%}")
+    print(f"  Logistic (app model) — test acc      : {acc_test_app:.1%}")
     print()
-    print(f"  Majority-class baseline       : {majority_acc:.1%}")
-    print(f"  Lift over baseline            : {lift:+.1%}")
+    print(f"  Majority-class baseline              : {majority_acc:.1%}")
+    print(f"  Lift over baseline ({model_label})         : {lift:+.1%}")
     if args.out:
         print(f"\n  priors.json written to        : {args.out}")
     print("=" * 60)
@@ -1263,6 +1252,151 @@ def main() -> None:
         X_train, y_train, X_val, y_val, sids_train, w_app,
     )
     print_feature_table(analysis)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # PART 5 — Online Huber learning simulation
+    # Simulates what happens in the app: start from population weights, receive
+    # one ESM-labeled sample at a time, do a Huber SGD step, track accuracy.
+    # Target encoding: stressed → +1, calm → -1  (matches [-3,+3] score range)
+    # ─────────────────────────────────────────────────────────────────────────
+    print("\n" + "=" * 60)
+    print("PART 5 — Online Huber Learning Simulation")
+    print("=" * 60)
+    print("Each test subject starts from population weights.")
+    print("Accuracy is measured BEFORE each update (predict-then-learn).\n")
+
+    _simulate_online_learning(
+        X_test, y_test, sids_test,
+        w_init=w_app, b_init=b_app,
+        pp_test=pp_test, app_priors=app_priors,
+        lrs=(0.01, 0.05, 0.1),
+        best_lr=0.05,
+        n_warmup=30,
+    )
+
+
+def _simulate_online_learning(
+    X_test: np.ndarray,
+    y_test: np.ndarray,
+    sids_test: List[str],
+    w_init: np.ndarray,
+    b_init: float,
+    pp_test: Dict,
+    app_priors: Dict,
+    lrs: Tuple = (0.01, 0.05, 0.1),
+    best_lr: float = 0.05,
+    huber_delta: float = 1.0,
+    weight_decay: float = 0.01,
+    n_warmup: int = 30,
+    report_at: Tuple = (0, 1, 3, 5, 10, 20, 30, 50),
+) -> None:
+    """Simulate online Huber SGD for each lr; print accuracy-vs-N table."""
+    subjects = [s for s in sorted(set(sids_test))
+                if sids_test.count(s) >= 5]
+
+    if not subjects:
+        print("  [warn] No test subjects with ≥5 samples — skipping simulation.")
+        return
+
+    def _run_lr(lr: float) -> Dict[str, List[int]]:
+        """Returns {sid: [correct_before_update_0, correct_before_update_1, ...]}"""
+        curves: Dict[str, List[int]] = {}
+        for sid in subjects:
+            idx = [i for i, s in enumerate(sids_test) if s == sid]
+            X_sub = X_test[idx]
+            y_sub = y_test[idx]
+
+            # Per-person z-scores (mirrors app runtime behaviour)
+            priors = pp_test.get(sid, app_priors)
+            Xz = np.zeros_like(X_sub, dtype=float)
+            for j, name in enumerate(FEATURE_NAMES):
+                mu, sd = priors[name]["mean"], priors[name]["std"]
+                Xz[:, j] = np.clip((X_sub[:, j] - mu) / (sd + 1e-9), -Z_CLAMP, Z_CLAMP)
+
+            w = w_init.copy().astype(float)
+            b = float(b_init)
+            hits: List[int] = []
+
+            for i in range(len(Xz)):
+                z = Xz[i]
+                target = 1.0 if y_sub[i] == 1 else -1.0
+
+                # Predict BEFORE update
+                score = float(np.dot(w, z) + b)
+                hits.append(int((score > 0) == (y_sub[i] == 1)))
+
+                # Huber gradient  (quadratic core, linear tails)
+                residual = score - target
+                grad = residual if abs(residual) <= huber_delta else huber_delta * np.sign(residual)
+
+                # SGD step with L2 weight decay (keeps weights near population)
+                w = w * (1.0 - weight_decay * lr) - lr * grad * z
+                b = b - lr * grad
+
+            curves[sid] = hits
+        return curves
+
+    # ── Run all learning rates ────────────────────────────────────────────────
+    results: Dict[float, Dict] = {lr: _run_lr(lr) for lr in lrs}
+
+    # ── Aggregate: accuracy at each checkpoint N ──────────────────────────────
+    # For a subject with fewer than N samples, use their full curve.
+    def _acc_at(curves: Dict[str, List[int]], n: int) -> float:
+        hits, total = 0, 0
+        for hits_list in curves.values():
+            window = hits_list[:n] if n > 0 else []
+            hits  += sum(window)
+            total += len(window)
+        return hits / total if total > 0 else float("nan")
+
+    def _acc_after(curves: Dict[str, List[int]], n: int) -> float:
+        """Accuracy on samples index >= n (performance after n warm-up steps)."""
+        hits, total = 0, 0
+        for hits_list in curves.values():
+            window = hits_list[n:]
+            hits  += sum(window)
+            total += len(window)
+        return hits / total if total > 0 else float("nan")
+
+    # Population baseline: accuracy with w_init, b_init, personal z-scores, no updates
+    pop_curves = _run_lr(0.0)   # lr=0 → no weight change
+    pop_acc = _acc_after(pop_curves, 0)
+
+    print(f"  Population baseline (no adaptation) : {pop_acc:.1%}")
+    print(f"  Subjects simulated  : {len(subjects)}")
+    print(f"  Huber δ             : {huber_delta}   weight_decay : {weight_decay}\n")
+
+    # Header
+    col_w = 10
+    header = f"  {'After N':>8}" + "".join(f"  lr={lr:.2f}".rjust(col_w) for lr in lrs)
+    print(header)
+    print("  " + "-" * (8 + col_w * len(lrs) + 2 * len(lrs)))
+
+    checkpoints = [n for n in report_at]
+    for n in checkpoints:
+        row = f"  {n:>7} →"
+        for lr in lrs:
+            acc = _acc_after(results[lr], n)
+            marker = " ←best" if acc == max(_acc_after(results[l], n) for l in lrs) else ""
+            row += f"  {acc:>7.1%}{'':<3}"
+        print(row)
+
+    # ── Per-subject breakdown at best lr ─────────────────────────────────────
+    # Find lr that maximises accuracy after n_warmup samples
+    best_lr = best_lr if best_lr in lrs else max(lrs, key=lambda lr: _acc_after(results[lr], n_warmup))
+    best_curves = results[best_lr]
+
+    print(f"\n  Per-subject breakdown (lr={best_lr}, after {n_warmup} warm-up samples):")
+    print(f"  {'Subject':<10} {'N':>4}  {'Pop acc':>8}  {'Adapted':>8}  {'Δ':>6}")
+    print("  " + "-" * 42)
+    for sid in subjects:
+        n_samples = len(best_curves[sid])
+        pop_s  = float(np.mean(pop_curves[sid]))
+        ada_s  = float(np.mean(best_curves[sid][n_warmup:])) if n_samples > n_warmup else float("nan")
+        delta  = ada_s - pop_s if not np.isnan(ada_s) else float("nan")
+        d_str  = f"{delta:+.1%}" if not np.isnan(delta) else "   n/a"
+        print(f"  {sid:<10} {n_samples:>4}  {pop_s:>8.1%}  "
+              f"{ada_s if not np.isnan(ada_s) else 0:>8.1%}  {d_str:>6}")
 
 
 if __name__ == "__main__":
