@@ -26,22 +26,22 @@ import Foundation
 private let embeddedPriorsJSON = """
 {
   "priors": {
-    "HR_mean_30":  { "mean": 75.8,  "std": 7.0  },
-    "HR_std_30":   { "mean": 4.5,   "std": 2.5  },
-    "HR_slope_30": { "mean": 0.0,   "std": 0.5  },
-    "HRV_30":      { "mean": 45.0,  "std": 18.0 },
-    "HR_mean_5":   { "mean": 75.8,  "std": 7.0  },
-    "HRV_5":       { "mean": 45.0,  "std": 18.0 }
+    "HR_mean_30":  { "mean": 99.412356,  "std": 22.065785 },
+    "HR_std_30":   { "mean": 13.343202,  "std": 7.11597   },
+    "HR_slope_30": { "mean": 0.549784,   "std": 28.234036 },
+    "HRV_30":      { "mean": 68.035729,  "std": 17.079546 },
+    "HR_mean_5":   { "mean": 100.847254, "std": 24.639069 },
+    "HRV_5":       { "mean": 66.030257,  "std": 17.284834 }
   },
   "weights": {
-    "HR_mean_30":  0.0,
-    "HR_std_30":   0.0,
-    "HR_slope_30": 0.0,
-    "HRV_30":      0.0,
-    "HR_mean_5":   0.0,
-    "HRV_5":       0.0
+    "HR_mean_30":   0.020433,
+    "HR_std_30":    0.198424,
+    "HR_slope_30": -0.197515,
+    "HRV_30":      -0.019022,
+    "HR_mean_5":   -0.475382,
+    "HRV_5":        0.018774
   },
-  "bias": 0.0
+  "bias": -0.178359
 }
 """
 
