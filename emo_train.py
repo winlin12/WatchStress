@@ -266,69 +266,6 @@ def collect_split(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Feature extraction for a single ESM event
-# ─────────────────────────────────────────────────────────────────────────────
-
-def extract_features(
-    subj_dir: str,
-    response_ts_ms: int,
-    window_ms: int,
-) -> Optional[np.ndarray]:
-    """
-    Return a 5-element feature vector for one ESM event, or None if data
-    is insufficient.  Features: HR, HRV, stepCount, Calorie, Distance.
-
-    Sensor data window: [response_ts_ms - window_ms, response_ts_ms]
-    """
-    t0 = response_ts_ms - window_ms
-    t1 = response_ts_ms
-
-    # ── HR ────────────────────────────────────────────────────────────────
-    hr_df = load_csv_safe(os.path.join(subj_dir, "HR.csv"))
-    if hr_df is None:
-        return None
-    mask_hr = (hr_df["timestamp"] >= t0) & (hr_df["timestamp"] <= t1)
-    hr_vals = hr_df.loc[mask_hr, "bpm"].values.astype(float)
-    if len(hr_vals) < 3:
-        return None
-    feat_hr = float(np.mean(hr_vals))
-
-    # ── HRV (from RRI) ────────────────────────────────────────────────────
-    rri_df = load_csv_safe(os.path.join(subj_dir, "RRI.csv"))
-    feat_hrv = float("nan")
-    if rri_df is not None:
-        mask_rri = (rri_df["timestamp"] >= t0) & (rri_df["timestamp"] <= t1)
-        rri_vals = rri_df.loc[mask_rri, "interval"].values.astype(float)
-        feat_hrv = rmssd_ms(rri_vals)
-
-    # ── Step Count ────────────────────────────────────────────────────────
-    step_df = load_csv_safe(os.path.join(subj_dir, "StepCount.csv"))
-    feat_steps = float("nan")
-    if step_df is not None:
-        feat_steps = cumulative_delta(step_df, "stepsToday", t0, t1)
-
-    # ── Calorie ───────────────────────────────────────────────────────────
-    cal_df = load_csv_safe(os.path.join(subj_dir, "Calorie.csv"))
-    feat_cal = float("nan")
-    if cal_df is not None:
-        feat_cal = cumulative_delta(cal_df, "caloriesToday", t0, t1)
-
-    # ── Distance ──────────────────────────────────────────────────────────
-    dist_df = load_csv_safe(os.path.join(subj_dir, "Distance.csv"))
-    feat_dist = float("nan")
-    if dist_df is not None:
-        feat_dist = cumulative_delta(dist_df, "distanceToday", t0, t1)
-
-    vec = np.array([feat_hr, feat_hrv, feat_steps, feat_cal, feat_dist], dtype=float)
-
-    # Require at minimum HR to be valid
-    if not np.isfinite(vec[0]):
-        return None
-
-    return vec
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Logistic regression (Newton-Raphson, pure NumPy)
 # ─────────────────────────────────────────────────────────────────────────────
 

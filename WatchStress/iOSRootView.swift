@@ -46,6 +46,13 @@ struct iOSRootView: View {
     private let scoreEngine: ScoreEngine = ScoreEngine()
     @State private var scoreDetails: ScoreEngine.ScoreResult? = nil
 
+    // Huber feedback state
+    /// The feature sample that produced the most recently displayed score.
+    /// Held so feedback can be applied to the correct sample.
+    @State private var pendingFeedbackSample: ScoreEngine.FeatureSample? = nil
+    /// True once the user has reacted to the current score (prevents double-taps).
+    @State private var feedbackGiven: Bool = false
+
     var body: some View {
         ZStack {
             // Lightweight background to match brand tone
@@ -58,10 +65,31 @@ struct iOSRootView: View {
                 if let result = scoreDetails {
                     StressRingView(score: result.score)
                         .animation(.easeInOut(duration: 0.6), value: result.score)
-                    Text("Confidence: \(result.confidence.rawValue)")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .accessibilityLabel("Confidence \(result.confidence.rawValue)")
+                    HStack(spacing: 6) {
+                        Text("Confidence: \(result.confidence.rawValue)")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        if scoreEngine.isPersonalized {
+                            Label("Calibrated to you", systemImage: "person.crop.circle.badge.checkmark")
+                                .font(.caption)
+                                .foregroundStyle(.green)
+                                .labelStyle(.iconOnly)
+                                .help("Score is calibrated to your personal baseline")
+                        }
+                    }
+                    .accessibilityLabel("Confidence \(result.confidence.rawValue)\(scoreEngine.isPersonalized ? ", calibrated to you" : "")")
+
+                    // ── Huber feedback prompt ─────────────────────────────
+                    if let sample = pendingFeedbackSample {
+                        FeedbackPromptView(
+                            feedbackGiven: feedbackGiven,
+                            feedbackCount: scoreEngine.feedbackCount
+                        ) { wasStressed in
+                            scoreEngine.recordFeedback(sample: sample, wasStressed: wasStressed)
+                            withAnimation { feedbackGiven = true }
+                        }
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    }
                     if useDebugOverrides {
                         Text("Debug overrides enabled")
                             .font(.caption)
@@ -235,6 +263,62 @@ private struct LogAlert: Identifiable {
     let id = UUID()
     let title: String
     let message: String
+}
+
+/// Compact thumbs-up / thumbs-down prompt shown below the stress ring.
+/// Disappears once feedback is given.  Each tap calls `onFeedback(wasStressed:)`,
+/// which triggers a Huber SGD step inside ScoreEngine.
+private struct FeedbackPromptView: View {
+    let feedbackGiven:  Bool
+    let feedbackCount:  Int
+    let onFeedback: (_ wasStressed: Bool) -> Void
+
+    var body: some View {
+        VStack(spacing: 6) {
+            if feedbackGiven {
+                Label("Thanks — model updated", systemImage: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+                    .transition(.opacity)
+            } else {
+                Text("Was the score accurate?")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 20) {
+                    Button {
+                        onFeedback(false)
+                    } label: {
+                        Label("Calm", systemImage: "hand.thumbsup.fill")
+                            .font(.caption)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 7)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.green)
+                    .accessibilityLabel("I was calm — score overestimated stress")
+
+                    Button {
+                        onFeedback(true)
+                    } label: {
+                        Label("Stressed", systemImage: "hand.thumbsdown.fill")
+                            .font(.caption)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 7)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.orange)
+                    .accessibilityLabel("I was stressed — score underestimated stress")
+                }
+            }
+            if feedbackCount > 0 {
+                Text("\(feedbackCount) correction\(feedbackCount == 1 ? "" : "s") applied")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .animation(.easeInOut(duration: 0.3), value: feedbackGiven)
+        .padding(.vertical, 4)
+    }
 }
 
 /// ScoreDetailsView presents a detailed breakdown of the score calculation.
@@ -566,113 +650,30 @@ extension iOSRootView {
         )
     }
 
-    /// Builds a FeatureSample from current vitals and updates the computed score using ScoreEngine.
-    /// If live HealthKit strings are still "—" (e.g. on first launch), falls back to querying
-    /// the last 24 h of HealthKit data directly so a score is always computed.
+    /// Builds a FeatureSample from the proper 30-min / 5-min HealthKit windows
+    /// and updates the computed score using ScoreEngine.
+    /// Debug overrides bypass HealthKit and feed fixed values directly.
     @MainActor private func computeScoreFromVitals(animate: Bool) {
         if useDebugOverrides {
+            // Map debug sliders onto the windowed features
             let sample = ScoreEngine.sample(
-                HR: debugHeartRate,
-                HRV: debugHRV,
-                skinTemperature: debugWristTemp
+                HR_mean_30: debugHeartRate,
+                HR_std_30:  nil,
+                HR_slope_30: nil,
+                HRV_30:     debugHRV,
+                HR_mean_5:  debugHeartRate,
+                HRV_5:      debugHRV
             )
             applyScore(sample: sample, animate: animate)
             return
         }
 
-        // Helper: extract the leading number from a formatted string like "72 bpm"
-        func num(_ s: String) -> Double? { Double(s.filter { "0123456789.".contains($0) }) }
-
-        let hrVal    = num(vitals.heartRate)
-        let hrvVal   = num(vitals.hrvSDNN)
-        let tempVal  = num(vitals.wristTemperature)
-        let stepsVal = num(vitals.steps)
-        let calVal   = num(vitals.activeCalories)
-        let distVal  = num(vitals.distance)
-
-        // If we have at least HR, build sample immediately
-        if hrVal != nil {
-            let sample = ScoreEngine.sample(
-                HR: hrVal, HRV: hrvVal, skinTemperature: tempVal,
-                stepCount: stepsVal, Calorie: calVal, Distance: distVal
-            )
-            applyScore(sample: sample, animate: animate)
-            return
-        }
-
-        // No live data yet — query HealthKit history (last 24 h) asynchronously
+        // Always use the proper windowed sample from VitalsViewModel.
+        // computeScoreSample() queries the last 30-min and 5-min HK windows
+        // and returns nil values for features with no data — ScoreEngine
+        // simply skips those and uses whatever is available.
         Task { @MainActor in
-            let hk = HealthKitManager.shared
-            let end = Date()
-            let start = end.addingTimeInterval(-86400)   // 24 h ago
-
-            // HR: average of recent samples
-            var historicHR: Double?
-            if let hrType = HKObjectType.quantityType(forIdentifier: .heartRate) {
-                let samples = await hk.quantitySamples(for: hrType, start: start, end: end)
-                let vals = samples.map { $0.quantity.doubleValue(for: HKUnit.count().unitDivided(by: .minute())) }
-                if !vals.isEmpty { historicHR = vals.reduce(0, +) / Double(vals.count) }
-            }
-            // Fall back to resting HR if no active HR
-            if historicHR == nil, let rrType = HKObjectType.quantityType(forIdentifier: .restingHeartRate) {
-                let samples = await hk.quantitySamples(for: rrType, start: start, end: end)
-                if let last = samples.last {
-                    historicHR = last.quantity.doubleValue(for: HKUnit.count().unitDivided(by: .minute()))
-                }
-            }
-
-            // HRV
-            var historicHRV: Double?
-            if let hrvType = HKObjectType.quantityType(forIdentifier: .heartRateVariabilitySDNN) {
-                let samples = await hk.quantitySamples(for: hrvType, start: start, end: end)
-                if let last = samples.last {
-                    historicHRV = last.quantity.doubleValue(for: HKUnit.secondUnit(with: .milli))
-                }
-            }
-
-            // Skin temperature
-            var historicTemp: Double?
-            if #available(iOS 16.0, *), let wType = HKObjectType.quantityType(forIdentifier: .appleSleepingWristTemperature) {
-                let samples = await hk.quantitySamples(for: wType, start: start, end: end)
-                if let last = samples.last {
-                    historicTemp = last.quantity.doubleValue(for: HKUnit.degreeCelsius())
-                }
-            }
-            if historicTemp == nil, let bType = HKObjectType.quantityType(forIdentifier: .bodyTemperature) {
-                let samples = await hk.quantitySamples(for: bType, start: start, end: end)
-                if let last = samples.last {
-                    historicTemp = last.quantity.doubleValue(for: HKUnit.degreeCelsius())
-                }
-            }
-
-            // Steps (sum over window)
-            var historicSteps: Double?
-            if let sType = HKObjectType.quantityType(forIdentifier: .stepCount) {
-                let samples = await hk.quantitySamples(for: sType, start: start, end: end)
-                let total = samples.reduce(0.0) { $0 + $1.quantity.doubleValue(for: HKUnit.count()) }
-                if total > 0 { historicSteps = total }
-            }
-
-            // Calories (sum over window)
-            var historicCal: Double?
-            if let cType = HKObjectType.quantityType(forIdentifier: .activeEnergyBurned) {
-                let samples = await hk.quantitySamples(for: cType, start: start, end: end)
-                let total = samples.reduce(0.0) { $0 + $1.quantity.doubleValue(for: HKUnit.kilocalorie()) }
-                if total > 0 { historicCal = total }
-            }
-
-            // Distance (sum over window)
-            var historicDist: Double?
-            if let dType = HKObjectType.quantityType(forIdentifier: .distanceWalkingRunning) {
-                let samples = await hk.quantitySamples(for: dType, start: start, end: end)
-                let total = samples.reduce(0.0) { $0 + $1.quantity.doubleValue(for: HKUnit.meter()) }
-                if total > 0 { historicDist = total }
-            }
-
-            let sample = ScoreEngine.sample(
-                HR: historicHR, HRV: historicHRV, skinTemperature: historicTemp,
-                stepCount: historicSteps, Calorie: historicCal, Distance: historicDist
-            )
+            let sample = await vitals.computeScoreSample()
             applyScore(sample: sample, animate: animate)
         }
     }
@@ -682,6 +683,9 @@ extension iOSRootView {
         if !useDebugOverrides {
             scoreEngine.updateUserBaselinesIfNeeded(with: sample)
         }
+        // Store sample for Huber feedback; reset feedback state on every new score
+        pendingFeedbackSample = sample
+        feedbackGiven = false
         if animate {
             withAnimation(.easeInOut(duration: 0.6)) { scoreDetails = result }
         } else {

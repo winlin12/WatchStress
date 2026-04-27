@@ -85,6 +85,9 @@ final class VitalsViewModel: ObservableObject {
         }
     }
 
+    /// Pulls 7 days of HR + HRV samples to build this person's calm baseline.
+    /// Runs once per day. Stored μ/σ mirror `compute_personal_priors()` in app_accuracy.py —
+    /// once active, score = 0 means "at your own personal normal", not the population average.
     private func refreshHistoricalBaselinesIfNeeded(daysBack: Int = 7) async {
         guard authorized else { return }
 
@@ -98,7 +101,8 @@ final class VitalsViewModel: ObservableObject {
         guard let start = cal.date(byAdding: .day, value: -daysBack, to: Date()) else { return }
         let end = Date()
 
-        guard let hrType  = HKObjectType.quantityType(forIdentifier: .restingHeartRate),
+        // Use the same HR type as computeScoreSample so baselines match runtime features
+        guard let hrType  = HKObjectType.quantityType(forIdentifier: .heartRate),
               let hrvType = HKObjectType.quantityType(forIdentifier: .heartRateVariabilitySDNN)
         else { return }
 
@@ -109,23 +113,42 @@ final class VitalsViewModel: ObservableObject {
         async let hrvSamples = hk.quantitySamples(for: hrvType, start: start, end: end)
         let (hrAll, hrvAll) = await (hrSamples, hrvSamples)
 
-        let hrVals  = hrAll.map  { $0.quantity.doubleValue(for: bpmUnit) }
-        let hrvVals = hrvAll.map { $0.quantity.doubleValue(for: msUnit)  }
+        let hrVals  = hrAll.map { $0.quantity.doubleValue(for: bpmUnit) }
+        let hrvVals = hrvAll.map { $0.quantity.doubleValue(for: msUnit) }
 
         var baselines: [ScoreEngine.Feature: ScoreEngine.BaselineStats] = [:]
 
-        if let s = Self.makeBaselineStats(hrVals)  { baselines[.HR_mean_30] = s; baselines[.HR_mean_5] = s }
-        if let s = Self.makeBaselineStats(hrvVals) { baselines[.HRV_30] = s;     baselines[.HRV_5] = s     }
-
-        // HR_std_30 baseline: std of individual HR samples (proxy for within-window spread)
-        if hrVals.count >= 2 {
-            let mean = hrVals.reduce(0, +) / Double(hrVals.count)
-            let std  = (hrVals.map { ($0-mean)*($0-mean) }.reduce(0,+) / Double(hrVals.count-1)).squareRoot()
-            baselines[.HR_std_30] = ScoreEngine.BaselineStats(count: hrVals.count, mean: mean, stdDev: std)
+        // HR_mean_30 / HR_mean_5: μ = this person's typical HR; σ = their natural daily spread
+        if let s = Self.makeBaselineStats(hrVals) {
+            baselines[.HR_mean_30] = s
+            baselines[.HR_mean_5]  = s
         }
 
-        // HR_slope_30 baseline: near-zero slope is expected at rest
-        baselines[.HR_slope_30] = ScoreEngine.BaselineStats(count: 1, mean: 0.0, stdDev: 0.5)
+        // HRV_30 / HRV_5: μ = this person's typical HRV; σ = their natural daily spread
+        if let s = Self.makeBaselineStats(hrvVals) {
+            baselines[.HRV_30] = s
+            baselines[.HRV_5]  = s
+        }
+
+        // HR_std_30: estimate typical within-window HR variability from consecutive-sample diffs.
+        // mean = typical within-window std for this person; σ = half that (score=0 when normal).
+        if hrVals.count >= 4 {
+            let diffs = zip(hrVals, hrVals.dropFirst()).map { abs($0 - $1) }
+            let typicalStd = max((diffs.reduce(0, +) / Double(diffs.count)) / sqrt(2.0), 1.0)
+            baselines[.HR_std_30] = ScoreEngine.BaselineStats(
+                count:  hrVals.count,
+                mean:   typicalStd,
+                stdDev: typicalStd * 0.5
+            )
+        }
+
+        // HR_slope_30: zero slope = at rest (personal normal); σ scales with daily HR spread
+        let hrSpread = baselines[.HR_mean_30]?.stdDev ?? 0.5
+        baselines[.HR_slope_30] = ScoreEngine.BaselineStats(
+            count:  max(hrVals.count, 1),
+            mean:   0.0,
+            stdDev: max(hrSpread * 0.1, 0.3)   // ~10% of daily HR spread; minimum 0.3 bpm/min
+        )
 
         guard !baselines.isEmpty else { return }
         ScoreEngine.storeUserBaselines(baselines)

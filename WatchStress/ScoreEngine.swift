@@ -147,6 +147,51 @@ final class ScoreEngine {
     private let eps: Double = 1e-6
     private let zClip: Double = 3.0
 
+    /// Minimum number of stored HealthKit samples before a feature's
+    /// personal baseline is trusted over the population prior.
+    private let minUserSamples: Int = 10
+
+    // MARK: - Huber online learning hyperparameters (mirror app_accuracy.py PART 5)
+    /// Huber loss delta: quadratic for |residual| ≤ delta, linear beyond.
+    private let huberDelta:   Double = 1.0
+    /// SGD learning rate for weight updates.
+    private let adaptLR:      Double = 0.05
+    /// L2 weight decay — pulls w back toward population values each step.
+    private let weightDecay:  Double = 0.01
+
+    // MARK: - Adapted model (Huber SGD state, persisted in UserDefaults)
+
+    /// Mutable model weights that are updated via `recordFeedback`.
+    /// Starts as nil (falls back to priorsFile weights) and is initialised
+    /// on the first feedback call.
+    struct AdaptedModel: Codable {
+        var weights: [String: Double]
+        var bias:    Double
+        var feedbackCount: Int = 0
+    }
+
+    private static let adaptedModelKey = "ScoreEngine.adaptedModel"
+
+    static func loadAdaptedModel() -> AdaptedModel? {
+        guard let data = UserDefaults.standard.data(forKey: adaptedModelKey),
+              let m = try? JSONDecoder().decode(AdaptedModel.self, from: data) else { return nil }
+        return m
+    }
+
+    private static func saveAdaptedModel(_ m: AdaptedModel) {
+        if let data = try? JSONEncoder().encode(m) {
+            UserDefaults.standard.set(data, forKey: adaptedModelKey)
+        }
+    }
+
+    /// Reset all Huber-adapted weights back to the offline-trained population values.
+    func resetAdaptedModel() {
+        UserDefaults.standard.removeObject(forKey: Self.adaptedModelKey)
+    }
+
+    /// Number of user feedback events that have been incorporated so far.
+    var feedbackCount: Int { Self.loadAdaptedModel()?.feedbackCount ?? 0 }
+
     // MARK: - State
 
     private let priorsFile: PriorsFile
@@ -213,57 +258,111 @@ final class ScoreEngine {
     }
 
     /// Compute score:
-    ///   1. z_i    = clip((x_i - μ_i) / σ_i, -3, +3)
-    ///   2. linear = b + Σ w_i · z_i
-    ///   3. score  = clip(linear, -3, +3)   (positive = stressed, negative = calm)
+    ///   1. mu/sigma = user's personal baseline if enough data; else population prior.
+    ///      This means score 0 = at YOUR OWN normal, not the population average.
+    ///   2. z_i    = clip((x_i − mu_i) / sigma_i,  −3, +3)
+    ///   3. linear = activeBias + Σ w_i · z_i
+    ///      activeBias = 0 when personalised (so score=0 at user's own average),
+    ///      population bias when not yet personalised.
+    ///   4. score  = clip(linear, −3, +3)   caller scales to −100…+100 for display
     func computeScore(sample: FeatureSample) -> ScoreResult {
-        let bias = priorsFile.bias
-        var linear = bias
-        var rawContributions: [(feature: Feature, weight: Double, z: Double, value: Double, mean: Double, std: Double)] = []
+        let userStats    = Self.loadAllUserStats()
+        let adaptedModel = Self.loadAdaptedModel()
+
+        // Count features that have enough personal data
+        let personalizedCount = Feature.allCases.filter {
+            (userStats[$0]?.count ?? 0) >= minUserSamples
+        }.count
+        let personalized = personalizedCount >= max(1, Feature.allCases.count / 2)
+
+        // When personalised: zero the bias so that at the user's own average
+        // (all z_i = 0) the output is exactly 0.
+        // If an adapted model exists, use its bias (which already encodes personal shift).
+        let activeBias: Double
+        if let adapted = adaptedModel {
+            activeBias = personalized ? 0.0 : adapted.bias
+        } else {
+            activeBias = personalized ? 0.0 : priorsFile.bias
+        }
+        var linear = activeBias
+
+        var rawContributions: [(
+            feature: Feature, weight: Double, z: Double,
+            value: Double, mean: Double, std: Double, blendA: Double
+        )] = []
 
         for f in Feature.allCases {
             guard let x = sample.value(for: f) else { continue }
-            guard let w = priorsFile.weights[f.rawValue] else { continue }
-            guard let prior = priorsFile.priors[f.rawValue] else { continue }
 
-            let zRaw = (x - prior.mean) / (prior.std + eps)
-            let z = clamp(zRaw, lo: -zClip, hi: zClip)
-            linear += w * z
+            // Prefer adapted weight; fall back to priors.json weight
+            let w: Double
+            if let adapted = adaptedModel, let aw = adapted.weights[f.rawValue] {
+                w = aw
+            } else if let pw = priorsFile.weights[f.rawValue] {
+                w = pw
+            } else {
+                continue
+            }
 
-            rawContributions.append((feature: f, weight: w, z: z, value: x, mean: prior.mean, std: prior.std))
+            let mu:     Double
+            let sigma:  Double
+            let blendA: Double
+
+            if let us = userStats[f], us.count >= minUserSamples {
+                mu     = us.mean
+                sigma  = max(us.stdDev, eps)
+                blendA = 1.0
+            } else if let prior = priorsFile.priors[f.rawValue] {
+                mu     = prior.mean
+                sigma  = prior.std + eps
+                blendA = 0.0
+            } else {
+                continue
+            }
+
+            let zRaw = (x - mu) / sigma
+            let z    = clamp(zRaw, lo: -zClip, hi: zClip)
+            linear  += w * z
+
+            rawContributions.append((f, w, z, x, mu, sigma, blendA))
         }
 
         let score = clamp(linear, lo: -zClip, hi: zClip)
-
-        // Confidence: based on how many features contributed
-        let used = rawContributions.count
+        let used  = rawContributions.count
         let conf: Confidence = used >= 5 ? .high : used >= 3 ? .medium : .low
 
-        // Per-feature score delta: score(linear) - score(linear - w_i·z_i)
         let drivers: [DriverContribution] = rawContributions.map { item in
             let linearWithout = linear - item.weight * item.z
-            let scoreWithout = clamp(linearWithout, lo: -zClip, hi: zClip)
-            let delta = score - scoreWithout
+            let scoreWithout  = clamp(linearWithout, lo: -zClip, hi: zClip)
             return DriverContribution(
-                feature: item.feature,
-                weight: item.weight,
-                z: item.z,
-                scoreDelta: delta,
-                value: item.value,
-                mean: item.mean,
-                std: item.std,
-                blendA: 0.0
+                feature:    item.feature,
+                weight:     item.weight,
+                z:          item.z,
+                scoreDelta: score - scoreWithout,
+                value:      item.value,
+                mean:       item.mean,
+                std:        item.std,
+                blendA:     item.blendA
             )
         }.sorted { abs($0.scoreDelta) > abs($1.scoreDelta) }
 
         return ScoreResult(
-            score: score,
+            score:        score,
             linearOutput: linear,
             featuresUsed: used,
-            confidence: conf,
-            bias: bias,
-            drivers: drivers
+            confidence:   conf,
+            bias:         activeBias,
+            drivers:      drivers
         )
+    }
+
+    /// True once personal baselines are active (score 0 = user's own normal).
+    var isPersonalized: Bool {
+        let userStats = Self.loadAllUserStats()
+        let count = Feature.allCases.filter {
+            (userStats[$0]?.count ?? 0) >= minUserSamples
+        }.count
+        return count >= max(1, Feature.allCases.count / 2)
     }
 
     /// Update rolling per-user baselines (suggested: once per day).
@@ -287,6 +386,76 @@ final class ScoreEngine {
 
         Self.saveAllUserStats(stats)
         defaults.set(currentDay, forKey: lastKey)
+    }
+
+    /// Record explicit user feedback ("was I right?") and perform one Huber SGD step.
+    ///
+    /// - Parameters:
+    ///   - sample:      The `FeatureSample` that produced the score being corrected.
+    ///   - wasStressed: `true` if the user confirms they were stressed; `false` if calm.
+    ///
+    /// This mirrors `_simulate_online_learning` in `app_accuracy.py` (PART 5):
+    ///   target   = +1 (stressed) or −1 (calm)
+    ///   residual = score − target
+    ///   grad     = residual  if |residual| ≤ δ,  else δ·sign(residual)   (Huber)
+    ///   w ← w · (1 − λ·lr) − lr · grad · z        (L2 weight decay)
+    ///   b ← b − lr · grad
+    func recordFeedback(sample: FeatureSample, wasStressed: Bool) {
+        let userStats = Self.loadAllUserStats()
+
+        // Initialise adapted model from priors.json weights on first call
+        var adapted = Self.loadAdaptedModel() ?? AdaptedModel(
+            weights: Dictionary(
+                uniqueKeysWithValues: Feature.allCases.compactMap { f in
+                    guard let w = priorsFile.weights[f.rawValue] else { return nil }
+                    return (f.rawValue, w)
+                }
+            ),
+            bias: priorsFile.bias,
+            feedbackCount: 0
+        )
+
+        let target = wasStressed ? 1.0 : -1.0
+
+        // Compute per-feature z-scores (same logic as computeScore)
+        var zScores: [Feature: Double] = [:]
+        for f in Feature.allCases {
+            guard let x = sample.value(for: f) else { continue }
+            let mu:    Double
+            let sigma: Double
+            if let us = userStats[f], us.count >= minUserSamples {
+                mu    = us.mean
+                sigma = max(us.stdDev, eps)
+            } else if let prior = priorsFile.priors[f.rawValue] {
+                mu    = prior.mean
+                sigma = prior.std + eps
+            } else { continue }
+            zScores[f] = clamp((x - mu) / sigma, lo: -zClip, hi: zClip)
+        }
+
+        // Current prediction with adapted weights
+        var linear = adapted.bias
+        for f in Feature.allCases {
+            if let z = zScores[f], let w = adapted.weights[f.rawValue] {
+                linear += w * z
+            }
+        }
+        let score    = clamp(linear, lo: -zClip, hi: zClip)
+        let residual = score - target
+        let grad     = abs(residual) <= huberDelta
+            ? residual
+            : huberDelta * (residual > 0 ? 1.0 : -1.0)
+
+        // Huber SGD step with L2 weight decay
+        for f in Feature.allCases {
+            guard let z = zScores[f] else { continue }
+            let w = adapted.weights[f.rawValue] ?? 0.0
+            adapted.weights[f.rawValue] = w * (1.0 - weightDecay * adaptLR) - adaptLR * grad * z
+        }
+        adapted.bias -= adaptLR * grad
+        adapted.feedbackCount += 1
+
+        Self.saveAdaptedModel(adapted)
     }
 
 
@@ -330,6 +499,9 @@ final class ScoreEngine {
             var st = RunningStats()
             st.count = baseline.count
             st.mean  = baseline.mean
+            // Reconstruct m2 = variance × (n−1) so that stdDev works correctly.
+            // variance = stdDev²  →  m2 = stdDev² × max(n−1, 1)
+            st.m2 = baseline.stdDev * baseline.stdDev * Double(max(baseline.count - 1, 1))
             stats[feature] = st
         }
         saveAllUserStats(stats)

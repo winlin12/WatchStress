@@ -6,12 +6,12 @@ Full training → validation → testing pipeline that also generates priors.jso
 
 Pipeline
 --------
-    PART 1 (train)   47 subjects  →  fit logistic/linear regression on base features
+    PART 1 (train)   50 subjects  →  fit logistic/linear regression on base features
                                    compute priors (μ/σ) from baseline samples
                                    write priors.json  (ScoreEngine.swift compatible)
   PART 2 (compare) optional     →  train RF or XGBoost on engineered features
                                    for side-by-side accuracy comparison
-    PART 3 (test)    10 subjects  →  score with app regression model, per-subject report
+    PART 3 (test)    20 subjects  →  score with app regression model, per-subject report
                                    % calm in test set (66.2 % of people are calm)
 
 Scoring (for app model):
@@ -31,6 +31,7 @@ Usage
 import argparse
 import json
 import os
+import pickle
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Tuple
@@ -310,6 +311,321 @@ def collect_split(
     if not X_list:
         return np.empty((0, len(FEATURE_NAMES))), np.empty(0, dtype=int), []
     return np.vstack(X_list), np.array(y_list, dtype=int), sid_list
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WESAD dataset loader
+# ─────────────────────────────────────────────────────────────────────────────
+# WESAD uses an Empatica E4 wristband with pre-computed HR (1 Hz) and IBI.
+# Labels come from the pkl file (chest RespiBAN, 700 Hz):
+#   1 = baseline (calm → y=0)
+#   2 = stress   (TSST → y=1)
+#   3/4 = amusement/meditation, 0/6/7 = transitions → ignored
+#
+# Absolute timestamps: E4 HR.csv row 1 gives Unix start seconds.  We use the
+# same start time for the label array (hardware-synchronised).
+
+_WESAD_SUBJECTS = [
+    "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9",
+    "S10", "S11", "S13", "S14", "S15", "S16", "S17",
+]  # S1 and S12 missing from public release
+
+
+def _load_wesad_subject_data(wesad_root: str, sid: str) -> Optional[Dict]:
+    """Load E4 HR.csv, IBI.csv and pkl labels for one WESAD subject.
+
+    Returns a dict with absolute-ms time axes for HR, IBI, and labels,
+    or None if essential files are missing / unreadable.
+    """
+    e4_dir  = os.path.join(wesad_root, sid, f"{sid}_E4_Data")
+    pkl_path = os.path.join(wesad_root, sid, f"{sid}.pkl")
+
+    # ── HR.csv: row1=start_unix_s, row2=sample_rate (1 Hz), rest=HR bpm ──
+    hr_csv = os.path.join(e4_dir, "HR.csv")
+    if not os.path.exists(hr_csv) or not os.path.exists(pkl_path):
+        return None
+    try:
+        hr_lines = open(hr_csv).read().strip().split("\n")
+        hr_start_s = float(hr_lines[0])
+        hr_fs      = float(hr_lines[1])          # typically 1.0
+        hr_bpm     = np.array([float(x) for x in hr_lines[2:] if x.strip()])
+    except Exception:
+        return None
+    # Absolute millisecond timestamps at 1 Hz
+    hr_ts_ms = (hr_start_s * 1000 + np.arange(len(hr_bpm)) * (1000.0 / hr_fs)).astype(np.int64)
+
+    # ── IBI.csv: row1="start_unix IBI", rest=offset_s,ibi_s ─────────────
+    ibi_ts_ms:  np.ndarray = np.empty(0, dtype=np.int64)
+    ibi_ms_arr: np.ndarray = np.empty(0, dtype=float)
+    ibi_csv = os.path.join(e4_dir, "IBI.csv")
+    if os.path.exists(ibi_csv):
+        try:
+            ibi_lines  = open(ibi_csv).read().strip().split("\n")
+            ibi_start_s = float(ibi_lines[0].split(",")[0])
+            pairs: List[Tuple[float, float]] = []
+            for line in ibi_lines[1:]:
+                parts = line.strip().split(",")
+                if len(parts) == 2:
+                    try:
+                        pairs.append((ibi_start_s + float(parts[0]),
+                                      float(parts[1]) * 1000.0))  # → ms
+                    except ValueError:
+                        pass
+            if pairs:
+                ibi_ts_ms  = np.array([int(p[0] * 1000) for p in pairs], dtype=np.int64)
+                ibi_ms_arr = np.array([p[1]             for p in pairs], dtype=float)
+        except Exception:
+            pass
+
+    # ── Labels from pkl (RespiBAN, 700 Hz) — same start as E4 ────────────
+    try:
+        with open(pkl_path, "rb") as f:
+            d = pickle.load(f, encoding="latin1")
+        labels_raw = d["label"]
+    except Exception:
+        return None
+    fs_label = 700.0
+    label_ts_ms = (hr_start_s * 1000 + np.arange(len(labels_raw)) * (1000.0 / fs_label)).astype(np.int64)
+
+    return {
+        "hr_ts_ms":    hr_ts_ms,
+        "hr_bpm":      hr_bpm,
+        "ibi_ts_ms":   ibi_ts_ms,
+        "ibi_ms":      ibi_ms_arr,
+        "label_ts_ms": label_ts_ms,
+        "labels_raw":  labels_raw,
+    }
+
+
+def _extract_wesad_features(
+    wd: Dict,
+    sample_stride_s: int = 60,
+    min_lookback_min: float = 5.0,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Slide a sample point every *sample_stride_s* seconds within labelled
+    baseline (1→y=0) and stress (2→y=1) segments.  Each sample uses the same
+    two backward-looking windows (30 min / 5 min) as the EMO pipeline.
+
+    Returns (X, y) with shapes (N, 6) and (N,).
+    """
+    label_ts  = wd["label_ts_ms"]
+    labels_raw = wd["labels_raw"]
+
+    stride_ms     = sample_stride_s * 1000
+    min_back_ms   = int(min_lookback_min * 60 * 1000)
+    rec_start_ms  = int(label_ts[0])
+    rec_end_ms    = int(label_ts[-1])
+
+    sample_ts:     List[int] = []
+    sample_labels: List[int] = []
+
+    t_ms = rec_start_ms + min_back_ms
+    while t_ms <= rec_end_ms:
+        li = int(np.searchsorted(label_ts, t_ms, side="right")) - 1
+        if 0 <= li < len(labels_raw):
+            lbl = int(labels_raw[li])
+            if lbl in (1, 2):               # baseline or stress only
+                sample_ts.append(t_ms)
+                sample_labels.append(0 if lbl == 1 else 1)
+        t_ms += stride_ms
+
+    if not sample_ts:
+        return np.empty((0, len(FEATURE_NAMES))), np.empty(0, dtype=int)
+
+    ts_arr = np.array(sample_ts, dtype=np.int64)
+    y_arr  = np.array(sample_labels, dtype=int)
+
+    sensor_data = {
+        "HR.csv_ts":       wd["hr_ts_ms"],
+        "HR.csv_bpm":      wd["hr_bpm"],
+        "RRI.csv_ts":      wd["ibi_ts_ms"],
+        "RRI.csv_interval": wd["ibi_ms"],
+    }
+
+    X = extract_features_batch(sensor_data, ts_arr, window_ms=30 * 60 * 1000)
+    valid = np.isfinite(X[:, 0])
+    return X[valid], y_arr[valid]
+
+
+def collect_wesad(
+    wesad_root: str,
+    subjects: Optional[List[str]] = None,
+    sample_stride_s: int = 60,
+) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+    """Load all (or a specified subset of) WESAD subjects and return
+    (X, y, sids) compatible with the EMO pipeline.  Subject IDs are
+    prefixed with 'W_' (e.g. 'W_S2') to avoid collision with EMO codes."""
+    if subjects is None:
+        subjects = _WESAD_SUBJECTS
+
+    X_list, y_list, sid_list = [], [], []
+    for sid in subjects:
+        print(f"  [WESAD] {sid} … ", end="", flush=True)
+        wd = _load_wesad_subject_data(wesad_root, sid)
+        if wd is None:
+            print("skipped (files missing)")
+            continue
+        X, y = _extract_wesad_features(wd, sample_stride_s=sample_stride_s)
+        if len(X) == 0:
+            print("skipped (no valid windows)")
+            continue
+        wsid = f"W_{sid}"
+        X_list.append(X)
+        y_list.extend(y.tolist())
+        sid_list.extend([wsid] * len(X))
+        print(f"{len(X)} windows  (stress={int(y.sum())}, calm={len(y)-int(y.sum())})")
+
+    if not X_list:
+        return np.empty((0, len(FEATURE_NAMES))), np.empty(0, dtype=int), []
+    return np.vstack(X_list), np.array(y_list, dtype=int), sid_list
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LifeSnaps dataset loader
+# ─────────────────────────────────────────────────────────────────────────────
+# LifeSnaps: 71 Fitbit-wearing participants, ~10 weeks, 2021.
+# Sensor: Fitbit Charge 4 → hourly mean HR only (no per-minute HR, no IBI/RRI).
+# Labels: EMA multi-label emotion flags (0/1) sampled a few times per day.
+#
+# Feature mapping (hourly resolution → 6 features):
+#   HR_mean_30  ← current-hour bpm  (hourly mean ≈ 60-min average)
+#   HR_std_30   ← std of current + 2 preceding hours' bpm  (3-hr proxy)
+#   HR_slope_30 ← OLS slope over current + 2 preceding hours  (bpm/hr unit)
+#   HRV_30      ← NaN  (no IBI data)
+#   HR_mean_5   ← same as HR_mean_30  (sub-hourly resolution unavailable)
+#   HRV_5       ← NaN  (no IBI data)
+# NaN HRV features are imputed downstream with training-set medians.
+#
+# Stress label:
+#   y=1  if TENSE/ANXIOUS=1 OR SAD=1
+#   y=0  if RESTED/RELAXED=1 AND TENSE/ANXIOUS!=1 AND SAD!=1
+#   (all other EMA rows are ambiguous and discarded)
+#
+# Subject IDs are prefixed with "LS_" to avoid collision with EMO/WESAD codes.
+
+_LS_HOURLY_CSV = "hourly_fitbit_sema_df_unprocessed.csv"
+
+
+def collect_lifesnaps(
+    lifesnaps_root: str,
+    lookback_hours: int = 3,
+) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+    """Load LifeSnaps hourly Fitbit+EMA data and return (X, y, sids).
+
+    Each EMA row with a clear stress/calm label and a valid BPM reading
+    becomes one sample.  Features are derived from the current and preceding
+    *lookback_hours* hourly BPM readings.
+
+    Parameters
+    ----------
+    lifesnaps_root : str
+        Path to the top-level lifesnaps/ directory.
+    lookback_hours : int
+        Number of preceding hours (including current) used for std/slope.
+        Must be ≥ 2. Default 3.
+    """
+    try:
+        import pandas as _pd
+    except ImportError:
+        print("  [LifeSnaps] pandas required — pip install pandas", file=sys.stderr)
+        return np.empty((0, len(FEATURE_NAMES))), np.empty(0, dtype=int), []
+
+    csv_path = os.path.join(lifesnaps_root, "csv_rais_anonymized", _LS_HOURLY_CSV)
+    if not os.path.exists(csv_path):
+        print(f"  [LifeSnaps] CSV not found: {csv_path}", file=sys.stderr)
+        return np.empty((0, len(FEATURE_NAMES))), np.empty(0, dtype=int), []
+
+    df = _pd.read_csv(csv_path, index_col=0, low_memory=False)
+
+    # ── Build Unix timestamps (seconds) from date + hour columns ──────────────
+    # date = "YYYY-MM-DD", hour = float (0.0 … 23.0)
+    try:
+        ts_series = _pd.to_datetime(df["date"]) + _pd.to_timedelta(df["hour"].fillna(0).astype(int), unit="h")
+        df["_ts"] = ts_series.astype(np.int64) // 10 ** 9   # Unix seconds
+    except Exception as e:
+        print(f"  [LifeSnaps] Timestamp parse failed: {e}", file=sys.stderr)
+        return np.empty((0, len(FEATURE_NAMES))), np.empty(0, dtype=int), []
+
+    # ── Stress labels ─────────────────────────────────────────────────────────
+    tense = df["TENSE/ANXIOUS"].fillna(0)
+    sad   = df["SAD"].fillna(0)
+    rest  = df["RESTED/RELAXED"].fillna(0)
+
+    df["_stressed"] = ((tense == 1) | (sad == 1)).astype(float)
+    df["_calm"]     = ((rest  == 1) & (tense != 1) & (sad != 1)).astype(float)
+
+    X_list:   List[np.ndarray] = []
+    y_list:   List[int]        = []
+    sid_list: List[str]        = []
+
+    for uid, grp in df.groupby("id"):
+        # Sort by time but keep original df index so _stressed/_calm are accessible
+        grp = grp.sort_values("_ts")
+        ts_arr  = grp["_ts"].values.astype(np.int64)
+        bpm_arr = grp["bpm"].values.astype(float)
+        stressed_arr = grp["_stressed"].values.astype(float)
+        calm_arr     = grp["_calm"].values.astype(float)
+
+        # Valid rows: has a clear label (stressed XOR calm) AND valid bpm
+        valid_rows = (
+            ((stressed_arr == 1) | (calm_arr == 1)) &
+            np.isfinite(bpm_arr)
+        )
+        if not valid_rows.any():
+            continue
+
+        wsid = f"LS_{uid}"
+        n_added = 0
+        for i in np.where(valid_rows)[0]:
+            cur_bpm = float(bpm_arr[i])
+            cur_ts  = int(ts_arr[i])
+
+            # Collect current + preceding hours within lookback window
+            win_mask = (
+                (ts_arr <= cur_ts) &
+                (ts_arr >= cur_ts - (lookback_hours - 1) * 3600) &
+                np.isfinite(bpm_arr)
+            )
+            win_bpm = bpm_arr[win_mask].astype(float)
+            win_ts  = ts_arr[win_mask].astype(float)
+
+            feat = np.full(len(FEATURE_NAMES), np.nan)
+            # HR_mean_30 (index 0): current hour bpm
+            feat[0] = cur_bpm
+            # HR_std_30 (index 1): std of window bpm (need ≥ 2 points)
+            if len(win_bpm) >= 2:
+                feat[1] = float(np.std(win_bpm, ddof=1))
+            # HR_slope_30 (index 2): OLS slope in bpm/hr (need ≥ 2 points)
+            if len(win_bpm) >= 2:
+                t_hr = (win_ts - win_ts.mean()) / 3600.0
+                denom = float(np.dot(t_hr, t_hr))
+                if denom > 0:
+                    feat[2] = float(np.dot(t_hr, win_bpm - win_bpm.mean()) / denom)
+            # HRV_30 (index 3): NaN — no IBI
+            # HR_mean_5 (index 4): same as HR_mean_30 (sub-hourly unavailable)
+            feat[4] = cur_bpm
+            # HRV_5 (index 5): NaN — no IBI
+
+            X_list.append(feat)
+            y_list.append(int(stressed_arr[i]))
+            sid_list.append(wsid)
+            n_added += 1
+
+        if n_added > 0:
+            n_stress = sum(1 for j, s in enumerate(sid_list) if s == wsid and y_list[j] == 1)
+            n_calm   = sum(1 for j, s in enumerate(sid_list) if s == wsid and y_list[j] == 0)
+            print(f"  [LifeSnaps] {uid[:12]}…  {n_added} windows  "
+                  f"(stress={n_stress}, calm={n_calm})")
+
+    if not X_list:
+        return np.empty((0, len(FEATURE_NAMES))), np.empty(0, dtype=int), []
+
+    X = np.vstack(X_list)
+    y = np.array(y_list, dtype=int)
+    print(f"  [LifeSnaps] Total: {len(X)} windows from "
+          f"{len(set(sid_list))} subjects  "
+          f"(stress={int(y.sum())}, calm={len(y)-int(y.sum())})")
+    return X, y, sid_list
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -856,14 +1172,28 @@ def main() -> None:
                     help="Lookback window in minutes before each ESM response (default: 30)")
     ap.add_argument("--l2", type=float, default=1.0,
                     help="L2 regularisation strength for logistic regression (default: 1.0)")
-    ap.add_argument("--n_train", type=int, default=47)
-    ap.add_argument("--n_val",   type=int, default=20)
-    ap.add_argument("--n_test",  type=int, default=10)
+    ap.add_argument("--n_train", type=int, default=50)
+    ap.add_argument("--n_val",   type=int, default=7)
+    ap.add_argument("--n_test",  type=int, default=20)
     ap.add_argument("--no_gpu",  action="store_true")
     ap.add_argument("--epochs",  type=int, default=2000)
     ap.add_argument("--lr",      type=float, default=0.05)
     ap.add_argument("--workers", type=int, default=8,
                     help="Parallel threads for subject data loading (default: 8)")
+    ap.add_argument("--wesad_root", default=None,
+                    help="Path to the WESAD/ directory.  When supplied all WESAD subjects "
+                         "are loaded and merged into the training set (prefixed 'W_').")
+    ap.add_argument("--wesad_stride_s", type=int, default=60,
+                    help="Seconds between synthetic WESAD sample points (default: 60)")
+    ap.add_argument("--lifesnaps_root", default=None,
+                    help="Path to the lifesnaps/ directory.  When supplied all LifeSnaps "
+                         "subjects with HR + EMA data are merged into the training set "
+                         "(prefixed 'LS_').")
+    ap.add_argument("--lifesnaps_lookback_h", type=int, default=3,
+                    help="Hours of preceding BPM used for HR_std/slope features (default: 3)")
+    ap.add_argument("--lifesnaps_n_test", type=int, default=20,
+                    help="Number of LifeSnaps subjects (highest sample-count, both classes) "
+                         "reserved for the test set. Rest go to training. (default: 20)")
     args = ap.parse_args()
 
     # ── Device selection ─────────────────────────────────────────────────────
@@ -918,6 +1248,77 @@ def main() -> None:
 
     if len(X_train) < 10:
         sys.exit(f"[error] Too few training samples: {len(X_train)}. Check --emo_root.")
+
+    # ── WESAD: merge into training set ────────────────────────────────────────
+    if args.wesad_root:
+        if not os.path.isdir(args.wesad_root):
+            print(f"\n[warn] --wesad_root not found: {args.wesad_root}. Skipping WESAD.")
+        else:
+            print(f"\n── WESAD subjects (merged into training) ──")
+            X_w, y_w, sids_w = collect_wesad(
+                args.wesad_root, sample_stride_s=args.wesad_stride_s
+            )
+            if len(X_w) > 0:
+                X_train    = np.vstack([X_train, X_w])
+                y_train    = np.concatenate([y_train, y_w])
+                sids_train = sids_train + sids_w
+                print(f"  → +{len(X_w)} WESAD windows merged into training set")
+            else:
+                print("  [warn] No WESAD windows extracted — check WESAD folder structure.")
+
+    # ── LifeSnaps: split into train + test ───────────────────────────────────
+    if args.lifesnaps_root:
+        if not os.path.isdir(args.lifesnaps_root):
+            print(f"\n[warn] --lifesnaps_root not found: {args.lifesnaps_root}. Skipping LifeSnaps.")
+        else:
+            print(f"\n── LifeSnaps subjects ──")
+            X_ls, y_ls, sids_ls = collect_lifesnaps(
+                args.lifesnaps_root,
+                lookback_hours=args.lifesnaps_lookback_h,
+            )
+            if len(X_ls) > 0:
+                # ── Select test subjects: top-N by sample count, both classes ──
+                from collections import Counter as _Counter
+                ls_counts = _Counter(sids_ls)
+                # require at least 1 stressed + 1 calm sample
+                ls_has_both = set(
+                    s for s in ls_counts
+                    if sum(1 for i, sid in enumerate(sids_ls) if sid == s and y_ls[i] == 1) >= 1
+                    and sum(1 for i, sid in enumerate(sids_ls) if sid == s and y_ls[i] == 0) >= 1
+                )
+                ls_test_candidates = sorted(
+                    ls_has_both, key=lambda s: ls_counts[s], reverse=True
+                )
+                n_ls_test = min(args.lifesnaps_n_test, len(ls_test_candidates))
+                ls_test_sids = set(ls_test_candidates[:n_ls_test])
+                ls_train_sids = set(sids_ls) - ls_test_sids
+
+                # Split arrays
+                ls_test_mask  = np.array([s in ls_test_sids  for s in sids_ls])
+                ls_train_mask = np.array([s in ls_train_sids for s in sids_ls])
+
+                X_ls_train  = X_ls[ls_train_mask]
+                y_ls_train  = y_ls[ls_train_mask]
+                sids_ls_train = [s for s, m in zip(sids_ls, ls_train_mask) if m]
+
+                X_ls_test   = X_ls[ls_test_mask]
+                y_ls_test   = y_ls[ls_test_mask]
+                sids_ls_test = [s for s, m in zip(sids_ls, ls_test_mask) if m]
+
+                # Merge into train + test
+                if len(X_ls_train) > 0:
+                    X_train    = np.vstack([X_train, X_ls_train])
+                    y_train    = np.concatenate([y_train, y_ls_train])
+                    sids_train = sids_train + sids_ls_train
+                if len(X_ls_test) > 0:
+                    X_test     = np.vstack([X_test, X_ls_test])
+                    y_test     = np.concatenate([y_test, y_ls_test])
+                    sids_test  = sids_test + sids_ls_test
+
+                print(f"  → {len(ls_train_sids)} LifeSnaps subjects (+{len(X_ls_train)} windows) → training")
+                print(f"  → {n_ls_test} LifeSnaps subjects (+{len(X_ls_test)} windows) → test")
+            else:
+                print("  [warn] No LifeSnaps windows extracted — check folder structure.")
 
     print(f"\nSamples → train={len(X_train)} (stressed={int(y_train.sum())}), "
           f"val={len(X_val)} (stressed={int(y_val.sum())}), "
@@ -1003,7 +1404,7 @@ def main() -> None:
     if args.out:
         out_json = {
             "meta": {
-                "source": "K-EmoPhone (EMO)",
+                "source": "K-EmoPhone (EMO)" + (" + WESAD" if args.wesad_root else "") + (" + LifeSnaps" if args.lifesnaps_root else ""),
                 "split": {
                     "train": len(train_subj),
                     "val":   len(val_subj),
@@ -1262,8 +1663,13 @@ def main() -> None:
     print("\n" + "=" * 60)
     print("PART 5 — Online Huber Learning Simulation")
     print("=" * 60)
-    print("Each test subject starts from population weights.")
-    print("Accuracy is measured BEFORE each update (predict-then-learn).\n")
+    print("Three conditions (predict-then-learn, personal z-scores unless noted):")
+    print("  A  Population priors + NO adaptation   (app cold-start)")
+    print("  B  Personal priors   + NO adaptation   (personalised baseline only)")
+    print("  C  Personal priors   + Huber SGD       (full system, lr=0.05)")
+    print()
+    print("Subjects: all test subjects with ≥3 labelled samples.")
+    print("LifeSnaps test subjects (LS_ prefix) are included alongside EMO.\n")
 
     _simulate_online_learning(
         X_test, y_test, sids_test,
@@ -1290,24 +1696,41 @@ def _simulate_online_learning(
     n_warmup: int = 30,
     report_at: Tuple = (0, 1, 3, 5, 10, 20, 30, 50),
 ) -> None:
-    """Simulate online Huber SGD for each lr; print accuracy-vs-N table."""
+    """Simulate online Huber SGD for each lr; print accuracy-vs-N table.
+
+    Three conditions are evaluated:
+      A  Population priors (app_priors for all), no Huber  → cold-start ceiling
+      B  Personal priors (pp_test per subject),  no Huber  → personalisation-only lift
+      C  Personal priors + Huber SGD at best_lr            → full system
+
+    Results are broken down overall and by dataset group (EMO vs LifeSnaps).
+    """
+    # Include all subjects with ≥3 samples (covers LS test subjects with fewer windows)
     subjects = [s for s in sorted(set(sids_test))
-                if sids_test.count(s) >= 5]
+                if sids_test.count(s) >= 3]
 
     if not subjects:
-        print("  [warn] No test subjects with ≥5 samples — skipping simulation.")
+        print("  [warn] No test subjects with ≥3 samples — skipping simulation.")
         return
 
-    def _run_lr(lr: float) -> Dict[str, List[int]]:
-        """Returns {sid: [correct_before_update_0, correct_before_update_1, ...]}"""
+    def _run(lr: float, use_personal: bool) -> Dict[str, List[int]]:
+        """Returns {sid: [correct_before_update_0, ...]}
+        lr=0.0  → no weight change (baseline)
+        use_personal=False → forces population priors for every subject (Condition A)
+        use_personal=True  → uses pp_test per subject, falling back to app_priors
+        """
         curves: Dict[str, List[int]] = {}
         for sid in subjects:
             idx = [i for i, s in enumerate(sids_test) if s == sid]
             X_sub = X_test[idx]
             y_sub = y_test[idx]
 
-            # Per-person z-scores (mirrors app runtime behaviour)
-            priors = pp_test.get(sid, app_priors)
+            # Choose normalisation priors
+            if use_personal:
+                priors = pp_test.get(sid, app_priors)
+            else:
+                priors = app_priors
+
             Xz = np.zeros_like(X_sub, dtype=float)
             for j, name in enumerate(FEATURE_NAMES):
                 mu, sd = priors[name]["mean"], priors[name]["std"]
@@ -1325,78 +1748,130 @@ def _simulate_online_learning(
                 score = float(np.dot(w, z) + b)
                 hits.append(int((score > 0) == (y_sub[i] == 1)))
 
-                # Huber gradient  (quadratic core, linear tails)
-                residual = score - target
-                grad = residual if abs(residual) <= huber_delta else huber_delta * np.sign(residual)
-
-                # SGD step with L2 weight decay (keeps weights near population)
-                w = w * (1.0 - weight_decay * lr) - lr * grad * z
-                b = b - lr * grad
+                if lr > 0.0:
+                    # Huber gradient  (quadratic core, linear tails)
+                    residual = score - target
+                    grad = residual if abs(residual) <= huber_delta else huber_delta * np.sign(residual)
+                    # SGD step with L2 weight decay
+                    w = w * (1.0 - weight_decay * lr) - lr * grad * z
+                    b = b - lr * grad
 
             curves[sid] = hits
         return curves
 
-    # ── Run all learning rates ────────────────────────────────────────────────
-    results: Dict[float, Dict] = {lr: _run_lr(lr) for lr in lrs}
+    # ── Condition A: population priors, no Huber ─────────────────────────────
+    cond_a = _run(0.0, use_personal=False)
+    # ── Condition B: personal priors, no Huber ───────────────────────────────
+    cond_b = _run(0.0, use_personal=True)
+    # ── Condition C: personal priors + Huber (all lr values) ─────────────────
+    cond_c: Dict[float, Dict] = {lr: _run(lr, use_personal=True) for lr in lrs}
 
-    # ── Aggregate: accuracy at each checkpoint N ──────────────────────────────
-    # For a subject with fewer than N samples, use their full curve.
-    def _acc_at(curves: Dict[str, List[int]], n: int) -> float:
+    # ── Helper: aggregate accuracy after N warm-up steps ─────────────────────
+    def _acc_after(curves: Dict[str, List[int]], n: int,
+                   sid_filter=None) -> float:
         hits, total = 0, 0
-        for hits_list in curves.values():
-            window = hits_list[:n] if n > 0 else []
-            hits  += sum(window)
-            total += len(window)
-        return hits / total if total > 0 else float("nan")
-
-    def _acc_after(curves: Dict[str, List[int]], n: int) -> float:
-        """Accuracy on samples index >= n (performance after n warm-up steps)."""
-        hits, total = 0, 0
-        for hits_list in curves.values():
+        for sid, hits_list in curves.items():
+            if sid_filter and not sid_filter(sid):
+                continue
             window = hits_list[n:]
             hits  += sum(window)
             total += len(window)
         return hits / total if total > 0 else float("nan")
 
-    # Population baseline: accuracy with w_init, b_init, personal z-scores, no updates
-    pop_curves = _run_lr(0.0)   # lr=0 → no weight change
-    pop_acc = _acc_after(pop_curves, 0)
+    # dataset filters
+    is_ls  = lambda sid: sid.startswith("LS_")
+    is_emo = lambda sid: not sid.startswith("LS_") and not sid.startswith("W_")
 
-    print(f"  Population baseline (no adaptation) : {pop_acc:.1%}")
-    print(f"  Subjects simulated  : {len(subjects)}")
-    print(f"  Huber δ             : {huber_delta}   weight_decay : {weight_decay}\n")
+    # ── Global three-way comparison ───────────────────────────────────────────
+    best_lr_eff = best_lr if best_lr in lrs else max(
+        lrs, key=lambda lr: _acc_after(cond_c[lr], n_warmup))
+    best_cond_c = cond_c[best_lr_eff]
 
-    # Header
+    acc_a   = _acc_after(cond_a, 0)
+    acc_b   = _acc_after(cond_b, 0)
+    acc_c   = _acc_after(best_cond_c, n_warmup)
+    lift_ab = acc_b - acc_a
+    lift_bc = acc_c - acc_b
+    lift_ac = acc_c - acc_a
+
+    majority_acc = max(float(y_test.mean()), 1.0 - float(y_test.mean()))
+
+    n_emo = sum(1 for s in subjects if is_emo(s))
+    n_ls  = sum(1 for s in subjects if is_ls(s))
+
+    print(f"  Subjects simulated  : {len(subjects)} total  "
+          f"({n_emo} EMO, {n_ls} LifeSnaps)")
+    print(f"  Majority-class baseline              : {majority_acc:.1%}")
+    print(f"  Huber δ={huber_delta}  weight_decay={weight_decay}  "
+          f"lr={best_lr_eff}  warm-up={n_warmup} samples\n")
+
+    print("  ── Three-Condition Comparison (all test subjects) ──────────────────")
+    print(f"  {'Condition':<44} {'Accuracy':>9}  {'vs A':>7}")
+    print("  " + "-" * 63)
+    print(f"  A  Pop priors, no adaptation (cold-start)          {acc_a:>8.1%}  {'—':>7}")
+    print(f"  B  Personal priors, no adaptation                  {acc_b:>8.1%}  {lift_ab:>+7.1%}")
+    print(f"  C  Personal priors + Huber SGD (after {n_warmup} samples)  "
+          f"{acc_c:>8.1%}  {lift_ac:>+7.1%}")
+    print(f"\n     Personalisation lift  (A→B)         : {lift_ab:>+.1%}")
+    print(f"     Huber adaptation lift (B→C)         : {lift_bc:>+.1%}")
+    print(f"     Full system lift      (A→C)         : {lift_ac:>+.1%}")
+
+    # ── Per-dataset breakdown ─────────────────────────────────────────────────
+    datasets = [
+        ("EMO (K-EmoPhone)", is_emo),
+        ("LifeSnaps",        is_ls),
+    ]
+    print("\n  ── Per-Dataset Breakdown ───────────────────────────────────────────")
+    print(f"  {'Dataset':<20} {'N subj':>6}  "
+          f"{'A (pop)':>8}  {'B (pers)':>9}  {'C (Huber)':>10}  {'A→B':>6}  {'B→C':>6}")
+    print("  " + "-" * 77)
+    for ds_name, filt in datasets:
+        n_subj = sum(1 for s in subjects if filt(s))
+        if n_subj == 0:
+            continue
+        a_ds = _acc_after(cond_a,      0,          filt)
+        b_ds = _acc_after(cond_b,      0,          filt)
+        c_ds = _acc_after(best_cond_c, n_warmup,   filt)
+        print(f"  {ds_name:<20} {n_subj:>6}  "
+              f"{a_ds:>8.1%}  {b_ds:>9.1%}  {c_ds:>10.1%}  "
+              f"{(b_ds-a_ds):>+6.1%}  {(c_ds-b_ds):>+6.1%}")
+
+    # ── Accuracy vs. N feedback samples (Condition C, best lr) ───────────────
+    print(f"\n  ── Accuracy vs Feedback Count (lr={best_lr_eff}, personal priors) ──")
     col_w = 10
     header = f"  {'After N':>8}" + "".join(f"  lr={lr:.2f}".rjust(col_w) for lr in lrs)
     print(header)
     print("  " + "-" * (8 + col_w * len(lrs) + 2 * len(lrs)))
-
-    checkpoints = [n for n in report_at]
-    for n in checkpoints:
+    for n in report_at:
         row = f"  {n:>7} →"
         for lr in lrs:
-            acc = _acc_after(results[lr], n)
-            marker = " ←best" if acc == max(_acc_after(results[l], n) for l in lrs) else ""
-            row += f"  {acc:>7.1%}{'':<3}"
+            acc = _acc_after(cond_c[lr], n)
+            row += f"  {acc:>7.1%}   "
         print(row)
 
     # ── Per-subject breakdown at best lr ─────────────────────────────────────
-    # Find lr that maximises accuracy after n_warmup samples
-    best_lr = best_lr if best_lr in lrs else max(lrs, key=lambda lr: _acc_after(results[lr], n_warmup))
-    best_curves = results[best_lr]
-
-    print(f"\n  Per-subject breakdown (lr={best_lr}, after {n_warmup} warm-up samples):")
-    print(f"  {'Subject':<10} {'N':>4}  {'Pop acc':>8}  {'Adapted':>8}  {'Δ':>6}")
-    print("  " + "-" * 42)
+    print(f"\n  ── Per-Subject Breakdown  "
+          f"(lr={best_lr_eff}, after {n_warmup} warm-up samples) ──")
+    print(f"  {'Subject':<12} {'DS':<5} {'N':>4}  "
+          f"{'A (pop)':>8}  {'B (pers)':>9}  {'C (Huber)':>10}  "
+          f"{'A→B':>6}  {'B→C':>6}  {'A→C':>6}")
+    print("  " + "-" * 76)
     for sid in subjects:
-        n_samples = len(best_curves[sid])
-        pop_s  = float(np.mean(pop_curves[sid]))
-        ada_s  = float(np.mean(best_curves[sid][n_warmup:])) if n_samples > n_warmup else float("nan")
-        delta  = ada_s - pop_s if not np.isnan(ada_s) else float("nan")
-        d_str  = f"{delta:+.1%}" if not np.isnan(delta) else "   n/a"
-        print(f"  {sid:<10} {n_samples:>4}  {pop_s:>8.1%}  "
-              f"{ada_s if not np.isnan(ada_s) else 0:>8.1%}  {d_str:>6}")
+        n_samples = len(best_cond_c[sid])
+        a_s = float(np.mean(cond_a[sid]))
+        b_s = float(np.mean(cond_b[sid]))
+        c_s = (float(np.mean(best_cond_c[sid][n_warmup:]))
+               if n_samples > n_warmup else float("nan"))
+        ds_tag = "LS" if is_ls(sid) else ("EMO" if is_emo(sid) else "W")
+        ab = b_s - a_s
+        bc = (c_s - b_s) if not np.isnan(c_s) else float("nan")
+        ac = (c_s - a_s) if not np.isnan(c_s) else float("nan")
+        c_str  = f"{c_s:>10.1%}" if not np.isnan(c_s) else f"{'n/a':>10}"
+        bc_str = f"{bc:>+6.1%}"  if not np.isnan(bc)  else f"{'n/a':>6}"
+        ac_str = f"{ac:>+6.1%}"  if not np.isnan(ac)  else f"{'n/a':>6}"
+        print(f"  {sid:<12} {ds_tag:<5} {n_samples:>4}  "
+              f"{a_s:>8.1%}  {b_s:>9.1%}  {c_str}  "
+              f"{ab:>+6.1%}  {bc_str}  {ac_str}")
 
 
 if __name__ == "__main__":
