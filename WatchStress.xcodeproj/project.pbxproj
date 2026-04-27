@@ -7,36 +7,16 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		B53CC7542F12AA3A00CB86EC /* WatchStress Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = B53CC7532F12AA3A00CB86EC /* WatchStress Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
-		B53CC7552F12AA3A00CB86EC /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = B53CC73E2F12AA3800CB86EC /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = B53CC7522F12AA3A00CB86EC;
-			remoteInfo = "WatchStress Watch App";
-		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
-		B53CC7632F12AA3A00CB86EC /* Embed Watch Content */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
-			dstSubfolderSpec = 16;
-			files = (
-				B53CC7542F12AA3A00CB86EC /* WatchStress Watch App.app in Embed Watch Content */,
-			);
-			name = "Embed Watch Content";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		B53CC7462F12AA3900CB86EC /* WatchStress.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WatchStress.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		B53CC7532F12AA3A00CB86EC /* WatchStress Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "WatchStress Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -45,22 +25,10 @@
 			path = WatchStress;
 			sourceTree = "<group>";
 		};
-		B53CC7572F12AA3A00CB86EC /* WatchStress Watch App */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = "WatchStress Watch App";
-			sourceTree = "<group>";
-		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		B53CC7432F12AA3900CB86EC /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		B53CC7502F12AA3A00CB86EC /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -74,7 +42,6 @@
 			isa = PBXGroup;
 			children = (
 				B53CC7482F12AA3900CB86EC /* WatchStress */,
-				B53CC7572F12AA3A00CB86EC /* WatchStress Watch App */,
 				B53CC7472F12AA3900CB86EC /* Products */,
 			);
 			sourceTree = "<group>";
@@ -83,7 +50,6 @@
 			isa = PBXGroup;
 			children = (
 				B53CC7462F12AA3900CB86EC /* WatchStress.app */,
-				B53CC7532F12AA3A00CB86EC /* WatchStress Watch App.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -98,12 +64,10 @@
 				B53CC7422F12AA3900CB86EC /* Sources */,
 				B53CC7432F12AA3900CB86EC /* Frameworks */,
 				B53CC7442F12AA3900CB86EC /* Resources */,
-				B53CC7632F12AA3A00CB86EC /* Embed Watch Content */,
 			);
 			buildRules = (
 			);
 			dependencies = (
-				B53CC7562F12AA3A00CB86EC /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				B53CC7482F12AA3900CB86EC /* WatchStress */,
@@ -113,28 +77,6 @@
 			);
 			productName = WatchStress;
 			productReference = B53CC7462F12AA3900CB86EC /* WatchStress.app */;
-			productType = "com.apple.product-type.application";
-		};
-		B53CC7522F12AA3A00CB86EC /* WatchStress Watch App */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = B53CC7602F12AA3A00CB86EC /* Build configuration list for PBXNativeTarget "WatchStress Watch App" */;
-			buildPhases = (
-				B53CC74F2F12AA3A00CB86EC /* Sources */,
-				B53CC7502F12AA3A00CB86EC /* Frameworks */,
-				B53CC7512F12AA3A00CB86EC /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-			);
-			fileSystemSynchronizedGroups = (
-				B53CC7572F12AA3A00CB86EC /* WatchStress Watch App */,
-			);
-			name = "WatchStress Watch App";
-			packageProductDependencies = (
-			);
-			productName = "WatchStress Watch App";
-			productReference = B53CC7532F12AA3A00CB86EC /* WatchStress Watch App.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -148,9 +90,6 @@
 				LastUpgradeCheck = 2620;
 				TargetAttributes = {
 					B53CC7452F12AA3900CB86EC = {
-						CreatedOnToolsVersion = 26.2;
-					};
-					B53CC7522F12AA3A00CB86EC = {
 						CreatedOnToolsVersion = 26.2;
 					};
 				};
@@ -170,20 +109,12 @@
 			projectRoot = "";
 			targets = (
 				B53CC7452F12AA3900CB86EC /* WatchStress */,
-				B53CC7522F12AA3A00CB86EC /* WatchStress Watch App */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		B53CC7442F12AA3900CB86EC /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		B53CC7512F12AA3A00CB86EC /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -200,21 +131,9 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		B53CC74F2F12AA3A00CB86EC /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
-		B53CC7562F12AA3A00CB86EC /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = B53CC7522F12AA3A00CB86EC /* WatchStress Watch App */;
-			targetProxy = B53CC7552F12AA3A00CB86EC /* PBXContainerItemProxy */;
-		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
@@ -332,77 +251,6 @@
 			};
 			name = Release;
 		};
-		B53CC7612F12AA3A00CB86EC /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = "WatchStress Watch App/WatchStress Watch App.entitlements";
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 99DA87P22W;
-				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = WatchStress;
-				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "<key>NSHealthShareUsageDescription</key>\n<string>This app reads your sleep, heart rate, HRV, steps, and other vitals to compute your stress score.</string>\n<key>NSHealthUpdateUsageDescription</key>\n<string>This app writes health data to help you track wellness trends.</string>";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
-				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.winstonlin.WatchStress;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-				);
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.winstonlin.WatchStress.watchkitapp;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = watchos;
-				SKIP_INSTALL = YES;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 4;
-				WATCHOS_DEPLOYMENT_TARGET = 26.2;
-			};
-			name = Debug;
-		};
-		B53CC7622F12AA3A00CB86EC /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = "WatchStress Watch App/WatchStress Watch App.entitlements";
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 99DA87P22W;
-				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = WatchStress;
-				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "<key>NSHealthShareUsageDescription</key>\n<string>This app reads your sleep, heart rate, HRV, steps, and other vitals to compute your stress score.</string>\n<key>NSHealthUpdateUsageDescription</key>\n<string>This app writes health data to help you track wellness trends.</string>";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
-				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.winstonlin.WatchStress;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-				);
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.winstonlin.WatchStress.watchkitapp;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = watchos;
-				SKIP_INSTALL = YES;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 4;
-				VALIDATE_PRODUCT = YES;
-				WATCHOS_DEPLOYMENT_TARGET = 26.2;
-			};
-			name = Release;
-		};
 		B53CC7652F12AA3A00CB86EC /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -486,15 +334,6 @@
 			buildConfigurations = (
 				B53CC75E2F12AA3A00CB86EC /* Debug */,
 				B53CC75F2F12AA3A00CB86EC /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		B53CC7602F12AA3A00CB86EC /* Build configuration list for PBXNativeTarget "WatchStress Watch App" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				B53CC7612F12AA3A00CB86EC /* Debug */,
-				B53CC7622F12AA3A00CB86EC /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

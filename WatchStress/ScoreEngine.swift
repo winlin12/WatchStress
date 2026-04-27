@@ -104,7 +104,7 @@ final class ScoreEngine {
     }
 
     struct ScoreResult {
-        /// Stress score in −3…+3. Positive = stressed, negative = calm, 0 = neutral.
+        /// Stress score in −100…+100. Positive = stressed, negative = calm, 0 = neutral.
         let score: Double
         /// Raw linear output: b + Σ w_i · z_i (before clamping)
         let linearOutput: Double
@@ -327,13 +327,15 @@ final class ScoreEngine {
             rawContributions.append((f, w, z, x, mu, sigma, blendA))
         }
 
-        let score = clamp(linear, lo: -zClip, hi: zClip)
-        let used  = rawContributions.count
+        let rawScore = clamp(linear, lo: -zClip, hi: zClip)
+        let scale    = 100.0 / zClip          // maps −3…+3  →  −100…+100
+        let score    = rawScore * scale
+        let used     = rawContributions.count
         let conf: Confidence = used >= 5 ? .high : used >= 3 ? .medium : .low
 
         let drivers: [DriverContribution] = rawContributions.map { item in
             let linearWithout = linear - item.weight * item.z
-            let scoreWithout  = clamp(linearWithout, lo: -zClip, hi: zClip)
+            let scoreWithout  = clamp(linearWithout, lo: -zClip, hi: zClip) * scale
             return DriverContribution(
                 feature:    item.feature,
                 weight:     item.weight,
@@ -490,6 +492,11 @@ final class ScoreEngine {
             let delta = x - mean
             mean += delta / Double(count)
             m2 += delta * (x - mean)
+        }
+        /// Population std dev derived from Welford's m2 accumulator.
+        var stdDev: Double {
+            guard count > 1 else { return 0 }
+            return sqrt(m2 / Double(count - 1))
         }
     }
 

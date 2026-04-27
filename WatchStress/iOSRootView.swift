@@ -367,7 +367,7 @@ private struct ScoreDetailsView: View {
                                             Text("z: \(formatSigned(driver.z, decimals: 2))")
                                             Text("Weight: \(formatSigned(driver.weight, decimals: 3))")
                                             Text("Score delta: \(formatSigned(driver.scoreDelta, decimals: 2))")
-                                                .foregroundStyle(driver.scoreDelta >= 0 ? .green : .red)
+                                                .foregroundStyle(driver.scoreDelta > 0 ? .red : .green)
                                             Text("Blend a: \(format(driver.blendA, decimals: 2))")
                                         }
                                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -421,25 +421,23 @@ private struct ScoreDetailsView: View {
 
     private func featureName(for feature: ScoreEngine.Feature) -> String {
         switch feature {
-        case .HR:              return "Heart Rate"
-        case .HRV:             return "HRV (SDNN)"
-        case .skinTemperature: return "Skin Temperature"
-        case .UltraViolet:     return "UV Exposure"
-        case .stepCount:       return "Step Count"
-        case .Calorie:         return "Active Calories"
-        case .Distance:        return "Distance"
+        case .HR_mean_30:  return "HR Mean (30 min)"
+        case .HR_std_30:   return "HR Variability (30 min)"
+        case .HR_slope_30: return "HR Trend (30 min)"
+        case .HRV_30:      return "HRV SDNN (30 min)"
+        case .HR_mean_5:   return "HR Mean (5 min)"
+        case .HRV_5:       return "HRV SDNN (5 min)"
         }
     }
 
     private func featureUnit(for feature: ScoreEngine.Feature) -> String {
         switch feature {
-        case .HR:              return "bpm"
-        case .HRV:             return "ms"
-        case .skinTemperature: return "°C"
-        case .UltraViolet:     return "idx"
-        case .stepCount:       return "steps"
-        case .Calorie:         return "kcal"
-        case .Distance:        return "m"
+        case .HR_mean_30:  return "bpm"
+        case .HR_std_30:   return "bpm"
+        case .HR_slope_30: return "bpm/min"
+        case .HRV_30:      return "ms"
+        case .HR_mean_5:   return "bpm"
+        case .HRV_5:       return "ms"
         }
     }
 
