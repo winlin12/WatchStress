@@ -835,7 +835,7 @@ extension iOSRootView {
 
         let hr = useDebugOverrides ? debugHeartRate : numeric(from: vitals.heartRate)
         let hrv = useDebugOverrides ? debugHRV : numeric(from: vitals.hrvSDNN)
-        let temp = useDebugOverrides ? debugWristTemp : numeric(from: vitals.wristTemperature)
+        let temp = numeric(from: vitals.wristTemperature)
         let confidence = scoreDetails?.confidence.rawValue ?? "Unknown"
 
         return StressLogEntry(
