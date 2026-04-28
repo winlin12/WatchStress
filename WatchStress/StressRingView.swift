@@ -1,16 +1,16 @@
 import SwiftUI
 
 /// StressRingView renders a circular ring for a score in the range −100…+100.
-///   +100 = fully filled red   (maximally stressed)
+///   −100 = fully filled red   (maximally stressed)
 ///      0 = empty ring         (neutral — at your personal baseline)
-///   −100 = fully filled green (maximally calm)
+///   +100 = fully filled green (maximally calm)
 /// Fill amount tracks abs(score)/100; color tracks sign.
 struct StressRingView: View {
     let score: Double   // expected −100…+100
 
     private var clamped: Double { min(100, max(-100, score)) }
     private var progress: Double { abs(clamped) / 100.0 }
-    private var ringColor: Color { clamped >= 0 ? .red : .green }
+    private var ringColor: Color { clamped < 0 ? .red : .green }
 
     var body: some View {
         ZStack {
@@ -36,7 +36,7 @@ struct StressRingView: View {
             }
         }
         .padding(24)
-        .accessibilityLabel("Score \(Int(clamped.rounded())), \(clamped > 0 ? "stressed" : clamped < 0 ? "calm" : "neutral")")
+        .accessibilityLabel("Score \(Int(clamped.rounded())), \(clamped < 0 ? "stressed" : clamped > 0 ? "calm" : "neutral")")
     }
 }
 

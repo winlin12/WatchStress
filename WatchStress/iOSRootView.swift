@@ -27,7 +27,6 @@ struct iOSRootView: View {
     @State private var useDebugOverrides: Bool = false
     @State private var debugHeartRate: Double = 70
     @State private var debugHRV: Double = 60
-    @State private var debugWristTemp: Double = 33.5
     @State private var smoothingTask: Task<Void, Never>? = nil
     @State private var scheduleTask: Task<Void, Never>? = nil
 
@@ -201,7 +200,6 @@ struct iOSRootView: View {
                 useDebugOverrides: $useDebugOverrides,
                 debugHeartRate: $debugHeartRate,
                 debugHRV: $debugHRV,
-                debugWristTemp: $debugWristTemp,
                 applyCurrentVitals: applyCurrentVitalsToDebug,
                 applyRelaxedPreset: applyRelaxedPreset,
                 applyStressedPreset: applyStressedPreset
@@ -367,7 +365,7 @@ private struct ScoreDetailsView: View {
                                             Text("z: \(formatSigned(driver.z, decimals: 2))")
                                             Text("Weight: \(formatSigned(driver.weight, decimals: 3))")
                                             Text("Score delta: \(formatSigned(driver.scoreDelta, decimals: 2))")
-                                                .foregroundStyle(driver.scoreDelta > 0 ? .red : .green)
+                                                .foregroundStyle(driver.scoreDelta < 0 ? .red : .green)
                                             Text("Blend a: \(format(driver.blendA, decimals: 2))")
                                         }
                                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -465,7 +463,6 @@ private struct DebugTuningView: View {
     @Binding var useDebugOverrides: Bool
     @Binding var debugHeartRate: Double
     @Binding var debugHRV: Double
-    @Binding var debugWristTemp: Double
     let applyCurrentVitals: () -> Void
     let applyRelaxedPreset: () -> Void
     let applyStressedPreset: () -> Void
@@ -502,14 +499,6 @@ private struct DebugTuningView: View {
                             .monospacedDigit()
                     }
                     Slider(value: $debugHRV, in: 10...150, step: 1)
-
-                    HStack {
-                        Text("Wrist Temperature")
-                        Spacer()
-                        Text(String(format: "%.1f C", debugWristTemp))
-                            .monospacedDigit()
-                    }
-                    Slider(value: $debugWristTemp, in: 30.0...36.5, step: 0.1)
                 }
                 .disabled(!useDebugOverrides)
             }
@@ -610,15 +599,13 @@ extension iOSRootView {
         let useDebugOverrides: Bool
         let heartRate: Double
         let hrv: Double
-        let wristTemp: Double
     }
 
     private var debugSnapshot: DebugSnapshot {
         DebugSnapshot(
             useDebugOverrides: useDebugOverrides,
             heartRate: debugHeartRate,
-            hrv: debugHRV,
-            wristTemp: debugWristTemp
+            hrv: debugHRV
         )
     }
 
