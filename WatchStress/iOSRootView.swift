@@ -918,21 +918,16 @@ extension iOSRootView {
         if let hrv = numeric(from: vitals.hrvSDNN) {
             debugHRV = hrv
         }
-        if let temp = numeric(from: vitals.wristTemperature) {
-            debugWristTemp = temp
-        }
     }
 
     private func applyRelaxedPreset() {
         debugHeartRate = 60
         debugHRV = 70
-        debugWristTemp = 34.0
     }
 
     private func applyStressedPreset() {
         debugHeartRate = 90
         debugHRV = 30
-        debugWristTemp = 32.5
     }
 
     private func numeric(from string: String) -> Double? {

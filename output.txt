@@ -1,0 +1,550 @@
+[CPU] Running on CPU (PyTorch not installed)
+
+Subject split → train=50, val=7, test=20
+  Test subjects: ['P60', 'P61', 'P62', 'P63', 'P64', 'P66', 'P67', 'P68', 'P69', 'P70', 'P71', 'P72', 'P73', 'P74', 'P75', 'P76', 'P77', 'P78', 'P79', 'P80']
+
+── Training subjects (50) ──
+  [ok] P01: 73/90 windows extracted
+  [ok] P02: 44/64 windows extracted
+  [ok] P03: 27/57 windows extracted
+  [ok] P04: 47/65 windows extracted
+  [ok] P05: 62/84 windows extracted
+  [ok] P06: 24/55 windows extracted
+  [ok] P07: 52/68 windows extracted
+  [ok] P08: 36/74 windows extracted
+  [ok] P09: 45/64 windows extracted
+  [ok] P10: 39/70 windows extracted
+  [ok] P11: 57/67 windows extracted
+  [ok] P12: 58/82 windows extracted
+  [ok] P13: 49/66 windows extracted
+  [ok] P14: 61/85 windows extracted
+  [ok] P15: 48/72 windows extracted
+  [ok] P16: 64/75 windows extracted
+  [ok] P17: 14/20 windows extracted
+  [ok] P18: 26/58 windows extracted
+  [ok] P19: 45/81 windows extracted
+  [ok] P20: 69/82 windows extracted
+  [ok] P21: 75/97 windows extracted
+  [ok] P22: 10/27 windows extracted
+  [ok] P23: 55/69 windows extracted
+  [ok] P24: 43/51 windows extracted
+  [ok] P25: 40/77 windows extracted
+  [ok] P26: 81/85 windows extracted
+  [ok] P28: 84/101 windows extracted
+  [ok] P29: 81/85 windows extracted
+  [ok] P30: 58/72 windows extracted
+  [ok] P31: 38/59 windows extracted
+  [ok] P32: 58/74 windows extracted
+  [ok] P33: 59/75 windows extracted
+  [ok] P34: 27/70 windows extracted
+  [ok] P35: 57/77 windows extracted
+  [ok] P36: 42/63 windows extracted
+  [ok] P37: 41/67 windows extracted
+  [ok] P38: 60/73 windows extracted
+  [ok] P39: 71/82 windows extracted
+  [ok] P40: 54/79 windows extracted
+  [ok] P41: 54/75 windows extracted
+  [ok] P42: 65/85 windows extracted
+  [ok] P43: 46/74 windows extracted
+  [ok] P44: 36/46 windows extracted
+  [ok] P45: 16/76 windows extracted
+  [ok] P46: 41/57 windows extracted
+  [ok] P47: 73/86 windows extracted
+  [ok] P48: 69/74 windows extracted
+  [ok] P49: 91/101 windows extracted
+  [ok] P50: 75/83 windows extracted
+  [ok] P51: 68/80 windows extracted
+
+── Validation subjects (7) ──
+  [ok] P52: 38/60 windows extracted
+  [ok] P53: 54/96 windows extracted
+  [ok] P54: 15/65 windows extracted
+  [ok] P55: 59/73 windows extracted
+  [ok] P56: 40/47 windows extracted
+  [ok] P57: 49/76 windows extracted
+  [ok] P58: 33/56 windows extracted
+
+── Test subjects (20) ──
+  [ok] P60: 52/90 windows extracted
+  [ok] P61: 73/84 windows extracted
+  [ok] P62: 40/42 windows extracted
+  [ok] P63: 52/74 windows extracted
+  [ok] P64: 81/85 windows extracted
+  [ok] P66: 101/110 windows extracted
+  [ok] P67: 63/74 windows extracted
+  [ok] P68: 41/61 windows extracted
+  [ok] P69: 77/90 windows extracted
+  [ok] P70: 77/87 windows extracted
+  [ok] P71: 48/53 windows extracted
+  [ok] P72: 58/70 windows extracted
+  [ok] P73: 26/50 windows extracted
+  [ok] P74: 23/73 windows extracted
+  [ok] P75: 99/109 windows extracted
+  [ok] P76: 66/82 windows extracted
+  [ok] P77: 44/68 windows extracted
+  [ok] P78: 49/77 windows extracted
+  [ok] P79: 57/71 windows extracted
+  [ok] P80: 39/60 windows extracted
+
+── WESAD subjects ──
+  [WESAD] S2 … 59 windows  (stress=21, calm=38)
+  [WESAD] S3 … 60 windows  (stress=22, calm=38)
+  [WESAD] S4 … 60 windows  (stress=21, calm=39)
+  [WESAD] S5 … 61 windows  (stress=21, calm=40)
+  [WESAD] S6 … 61 windows  (stress=22, calm=39)
+  [WESAD] S7 … 54 windows  (stress=21, calm=33)
+  [WESAD] S8 … 58 windows  (stress=23, calm=35)
+  [WESAD] S9 … 53 windows  (stress=21, calm=32)
+  [WESAD] S10 … 57 windows  (stress=24, calm=33)
+  [WESAD] S11 … 56 windows  (stress=23, calm=33)
+  [WESAD] S13 … 55 windows  (stress=22, calm=33)
+  [WESAD] S14 … 53 windows  (stress=22, calm=31)
+  [WESAD] S15 … 56 windows  (stress=23, calm=33)
+  [WESAD] S16 … 55 windows  (stress=22, calm=33)
+  [WESAD] S17 … 57 windows  (stress=24, calm=33)
+  → 12 WESAD subjects (+687 windows) → training
+  → 3 WESAD subjects (+168 windows) → test  ['W_S15', 'W_S16', 'W_S17']
+
+── LifeSnaps subjects ──
+  [LifeSnaps] 621e2e8e67b7…  4 windows  (stress=3, calm=1)
+  [LifeSnaps] 621e2eaf67b7…  13 windows  (stress=6, calm=7)
+  [LifeSnaps] 621e2ed667b7…  45 windows  (stress=14, calm=31)
+  [LifeSnaps] 621e2f1b67b7…  23 windows  (stress=19, calm=4)
+  [LifeSnaps] 621e2f3967b7…  69 windows  (stress=2, calm=67)
+  [LifeSnaps] 621e2f5767b7…  30 windows  (stress=28, calm=2)
+  [LifeSnaps] 621e2f6167b7…  19 windows  (stress=17, calm=2)
+  [LifeSnaps] 621e2f7a67b7…  69 windows  (stress=12, calm=57)
+  [LifeSnaps] 621e2f9167b7…  55 windows  (stress=36, calm=19)
+  [LifeSnaps] 621e2fb367b7…  73 windows  (stress=24, calm=49)
+  [LifeSnaps] 621e2fce67b7…  60 windows  (stress=36, calm=24)
+  [LifeSnaps] 621e2ff067b7…  31 windows  (stress=12, calm=19)
+  [LifeSnaps] 621e301367b7…  6 windows  (stress=1, calm=5)
+  [LifeSnaps] 621e301e67b7…  19 windows  (stress=12, calm=7)
+  [LifeSnaps] 621e309267b7…  5 windows  (stress=4, calm=1)
+  [LifeSnaps] 621e30c867b7…  54 windows  (stress=12, calm=42)
+  [LifeSnaps] 621e30e467b7…  13 windows  (stress=5, calm=8)
+  [LifeSnaps] 621e30f467b7…  31 windows  (stress=6, calm=25)
+  [LifeSnaps] 621e310d67b7…  25 windows  (stress=12, calm=13)
+  [LifeSnaps] 621e312a67b7…  22 windows  (stress=17, calm=5)
+  [LifeSnaps] 621e314867b7…  28 windows  (stress=11, calm=17)
+  [LifeSnaps] 621e322367b7…  25 windows  (stress=3, calm=22)
+  [LifeSnaps] 621e323667b7…  55 windows  (stress=7, calm=48)
+  [LifeSnaps] 621e324e67b7…  61 windows  (stress=10, calm=51)
+  [LifeSnaps] 621e326767b7…  44 windows  (stress=16, calm=28)
+  [LifeSnaps] 621e328667b7…  2 windows  (stress=1, calm=1)
+  [LifeSnaps] 621e329067b7…  38 windows  (stress=23, calm=15)
+  [LifeSnaps] 621e32af67b7…  123 windows  (stress=71, calm=52)
+  [LifeSnaps] 621e32d067b7…  26 windows  (stress=9, calm=17)
+  [LifeSnaps] 621e32d967b7…  18 windows  (stress=5, calm=13)
+  [LifeSnaps] 621e32e667b7…  5 windows  (stress=4, calm=1)
+  [LifeSnaps] 621e331067b7…  13 windows  (stress=8, calm=5)
+  [LifeSnaps] 621e332267b7…  8 windows  (stress=5, calm=3)
+  [LifeSnaps] 621e333967b7…  3 windows  (stress=1, calm=2)
+  [LifeSnaps] 621e335a67b7…  45 windows  (stress=25, calm=20)
+  [LifeSnaps] 621e337667b7…  61 windows  (stress=13, calm=48)
+  [LifeSnaps] 621e339967b7…  2 windows  (stress=0, calm=2)
+  [LifeSnaps] 621e33b067b7…  55 windows  (stress=38, calm=17)
+  [LifeSnaps] 621e33cf67b7…  49 windows  (stress=31, calm=18)
+  [LifeSnaps] 621e33ed67b7…  13 windows  (stress=1, calm=12)
+  [LifeSnaps] 621e340467b7…  11 windows  (stress=4, calm=7)
+  [LifeSnaps] 621e341067b7…  16 windows  (stress=0, calm=16)
+  [LifeSnaps] 621e345c67b7…  3 windows  (stress=1, calm=2)
+  [LifeSnaps] 621e346f67b7…  15 windows  (stress=5, calm=10)
+  [LifeSnaps] 621e34ca67b7…  8 windows  (stress=2, calm=6)
+  [LifeSnaps] 621e34db67b7…  18 windows  (stress=15, calm=3)
+  [LifeSnaps] 621e34ec67b7…  2 windows  (stress=2, calm=0)
+  [LifeSnaps] 621e34f767b7…  1 windows  (stress=0, calm=1)
+  [LifeSnaps] 621e34ff67b7…  12 windows  (stress=5, calm=7)
+  [LifeSnaps] 621e351a67b7…  44 windows  (stress=1, calm=43)
+  [LifeSnaps] 621e362467b7…  50 windows  (stress=6, calm=44)
+  [LifeSnaps] 621e366567b7…  20 windows  (stress=18, calm=2)
+  [LifeSnaps] 621e367e67b7…  2 windows  (stress=1, calm=1)
+  [LifeSnaps] 621e36bb67b7…  4 windows  (stress=1, calm=3)
+  [LifeSnaps] 621e36c267b7…  7 windows  (stress=0, calm=7)
+  [LifeSnaps] 621e36dd67b7…  16 windows  (stress=0, calm=16)
+  [LifeSnaps] 621e36f967b7…  61 windows  (stress=36, calm=25)
+  [LifeSnaps] 621e375367b7…  2 windows  (stress=2, calm=0)
+  [LifeSnaps] 621e375b67b7…  2 windows  (stress=2, calm=0)
+  [LifeSnaps] Total: 1634 windows from 59 subjects  (stress=661, calm=973)
+  → 39 LifeSnaps subjects (+492 windows) → training
+  → 20 LifeSnaps subjects (+1142 windows) → test
+
+── Wearable exam-stress subjects ──
+  [Wearable] EX_S1_M1 … 363 windows  (stress=180, calm=183)
+  [Wearable] EX_S1_M2 … 361 windows  (stress=132, calm=229)
+  [Wearable] EX_S1_F … 770 windows  (stress=52, calm=718)
+  [Wearable] EX_S2_M1 … 390 windows  (stress=180, calm=210)
+  [Wearable] EX_S2_M2 … 453 windows  (stress=135, calm=318)
+  [Wearable] EX_S2_F … 835 windows  (stress=52, calm=783)
+  [Wearable] EX_S3_M1 … 397 windows  (stress=180, calm=217)
+  [Wearable] EX_S3_M2 … 332 windows  (stress=137, calm=195)
+  [Wearable] EX_S3_F … 851 windows  (stress=52, calm=799)
+  [Wearable] EX_S4_M1 … 380 windows  (stress=180, calm=200)
+  [Wearable] EX_S4_M2 … 437 windows  (stress=132, calm=305)
+  [Wearable] EX_S4_F … 521 windows  (stress=52, calm=469)
+  [Wearable] EX_S5_M1 … 390 windows  (stress=180, calm=210)
+  [Wearable] EX_S5_M2 … 391 windows  (stress=134, calm=257)
+  [Wearable] EX_S5_F … 498 windows  (stress=52, calm=446)
+  [Wearable] EX_S6_M1 … 362 windows  (stress=180, calm=182)
+  [Wearable] EX_S6_M2 … 463 windows  (stress=134, calm=329)
+  [Wearable] EX_S6_F … 788 windows  (stress=52, calm=736)
+  [Wearable] EX_S7_M1 … 403 windows  (stress=180, calm=223)
+  [Wearable] EX_S7_M2 … 351 windows  (stress=137, calm=214)
+  [Wearable] EX_S7_F … 645 windows  (stress=52, calm=593)
+  [Wearable] EX_S8_M1 … 350 windows  (stress=180, calm=170)
+  [Wearable] EX_S8_M2 … 322 windows  (stress=137, calm=185)
+  [Wearable] EX_S8_F … 587 windows  (stress=52, calm=535)
+  [Wearable] EX_S9_M1 … 413 windows  (stress=180, calm=233)
+  [Wearable] EX_S9_M2 … 405 windows  (stress=135, calm=270)
+  [Wearable] EX_S9_F … 464 windows  (stress=52, calm=412)
+  [Wearable] EX_S10_M1 … 380 windows  (stress=180, calm=200)
+  [Wearable] EX_S10_M2 … 423 windows  (stress=133, calm=290)
+  [Wearable] EX_S10_F … 759 windows  (stress=52, calm=707)
+  → 27 wearable sessions (+12922 windows) → training
+  → 3 wearable sessions (+1562 windows) → test  ['EX_S10_F', 'EX_S10_M1', 'EX_S10_M2']
+
+Samples → train=16709 (stressed=4757), val=288 (stressed=62), test=4038 (stressed=1273)
+  ✓ No train/test subject overlap  (128 train subjects, 46 test subjects)
+
+  Personal priors: 164/181 subjects have ≥3 calm samples (rest fall back to population)
+
+============================================================
+PART 1 — App logistic model  (6 features, per-person z-scores)
+============================================================
+Fitting logistic regression (NumPy Newton-Raphson) …
+
+── Score diagnostics (train, personal z-scores) ──
+  Weights : {'HR_mean_30': '-0.0530', 'HR_std_30': '-0.1905', 'HR_slope_30': '+0.1516', 'HRV_30': '+0.0217', 'HR_mean_5': '+0.5162', 'HRV_5': '-0.0201'}
+  Bias    : +0.1696
+  Score std : 0.5862  (near-zero = no signal)
+  Predicted stressed % : 46.5%  (actual: 28.5%)
+
+Logistic accuracy (per-person z-scores):
+  Train  (50 subj) : 60.3%
+  Val    ( 7 subj) : 56.9%
+  Test   (20 subj) : 56.9%
+
+── Learned feature weights (0-100 scale) ──
+  HR_mean_30             -10.27  (raw: -0.0530)  [↑ stress]
+  HR_std_30              -36.91  (raw: -0.1905)  [↑ stress]
+  HR_slope_30            +29.37  (raw: +0.1516)  [↓ stress]
+  HRV_30                  +4.20  (raw: +0.0217)  [↓ stress]
+  HR_mean_5             +100.00  (raw: +0.5162)  [↓ stress]
+  HRV_5                   -3.90  (raw: -0.0201)  [↑ stress]
+  bias                  +0.1696
+
+✓ Wrote priors.json
+
+============================================================
+PART 2 — Comparison models  (SVM / RF / XGBoost / MLP)
+============================================================
+
+  [SVM] Training …
+
+  SVM (RBF, C=1)
+    Train acc : 82.5%   Test acc : 69.0%
+    TP=390  TN=2398  FP=367  FN=883
+
+  [RF] Training …
+
+  Random Forest (300 trees)
+    Train acc : 96.4%   Test acc : 69.9%
+    TP=494  TN=2328  FP=437  FN=779
+
+  [warn] XGBoost skipped — not installed.  pip install xgboost
+
+  [warn] MLP skipped: PyTorch not installed
+
+============================================================
+PART 3 — Per-subject test breakdown  (Random Forest)
+============================================================
+Subject     Samples  Stressed   Calm   Accuracy
+----------------------------------------------
+  EX_S10_F      759        52    707     90.6%
+  EX_S10_M1      380       180    200     74.2%
+  EX_S10_M2      423       133    290     85.8%
+  LS_621e2ed667b776a24085d8d1       45        14     31     64.4%
+  LS_621e2f3967b776a240c654db       69         2     67     68.1%
+  LS_621e2f7a67b776a240f14425       69        12     57     63.8%
+  LS_621e2f9167b776a240011ccb       55        36     19     43.6%
+  LS_621e2fb367b776a24015accd       73        24     49     61.6%
+  LS_621e2fce67b776a240279baa       60        36     24     50.0%
+  LS_621e2ff067b776a2403eb737       31        12     19     48.4%
+  LS_621e30c867b776a240d4aa6c       54        12     42     68.5%
+  LS_621e323667b776a240f19134       55         7     48     58.2%
+  LS_621e324e67b776a2400191cb       61        10     51     60.7%
+  LS_621e326767b776a24012e179       44        16     28     50.0%
+  LS_621e329067b776a2402ffad2       38        23     15     44.7%
+  LS_621e32af67b776a24045b4cf      123        71     52     47.2%
+  LS_621e335a67b776a240bb12ff       45        25     20     48.9%
+  LS_621e337667b776a240ce78ab       61        13     48     72.1%
+  LS_621e33b067b776a240f39e56       55        38     17     40.0%
+  LS_621e33cf67b776a240087de9       49        31     18     53.1%
+  LS_621e351a67b776a240f6204b       44         1     43     72.7%
+  LS_621e362467b776a2404ad513       50         6     44     68.0%
+  LS_621e36f967b776a240e5e7c9       61        36     25     47.5%
+  P60            52        12     40     75.0%
+  P61            73        22     51     63.0%
+  P62            40        14     26     60.0%
+  P63            52        20     32     59.6%
+  P64            81        22     59     65.4%
+  P66           101        53     48     48.5%
+  P67            63        15     48     71.4%
+  P68            41        13     28     68.3%
+  P69            77        25     52     66.2%
+  P70            77        46     31     40.3%
+  P71            48        33     15     45.8%
+  P72            58        15     43     72.4%
+  P73            26         5     21     61.5%
+  P74            23        14      9     52.2%
+  P75            99        19     80     69.7%
+  P76            66        26     40     53.0%
+  P77            44        14     30     54.5%
+  P78            49        22     27     61.2%
+  P79            57         9     48     77.2%
+  P80            39        15     24     51.3%
+  W_S15          56        23     33     46.4%
+  W_S16          55        22     33     92.7%
+  W_S17          57        24     33     96.5%
+----------------------------------------------
+  OVERALL      4038      1273   2765     69.9%
+
+Confusion counts (RF):
+  TP=494  TN=2328  FP=437  FN=779
+
+============================================================
+SUMMARY
+============================================================
+  Training subjects             : 50
+  Validation subjects           : 7
+  Test subjects                 : 20
+
+  Primary model (RF) — test acc   : 69.9%
+  Logistic (app model) — test acc      : 56.9%
+
+  Majority-class baseline              : 68.5%
+  Lift over baseline (RF)         : +1.4%
+
+  priors.json written to        : priors.json
+============================================================
+
+============================================================
+PART 4 — Feature Importance Analysis
+============================================================
+Comparing 7 methods to identify which features most reliably
+correlate with stress — model-free and model-based.
+
+  [analysis] Training RF (200 trees) for permutation importance & SHAP …
+
+────────────────────────────────────────────────────────────
+Raw Values  (sorted by consensus rank, 1 = strongest stress signal)
+────────────────────────────────────────────────────────────
+Feature                LogReg(w)     Cohen-d        MW-p     MutInfo    Within-r     PermImp        SHAP   Consensus
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+HR_slope_30              +0.1516     -0.1283   1.45e-136      0.0373     -0.0870     -0.0550     -0.0000        2.57
+HR_mean_5                +0.5162     -0.4053    2.76e-82      0.0320     -0.1191     -0.0359     -0.0000        2.57
+HR_std_30                -0.1905     +0.1908    9.54e-41      0.0390     +0.0469     -0.0455     -0.0000        3.00
+HR_mean_30               -0.0530     -0.2364    5.69e-17      0.0292     -0.0899     -0.0560     -0.0000        3.29
+HRV_30                   +0.0217     -0.0178      0.0139      0.2068     +0.0340     -0.0422     -0.0000        4.57
+HRV_5                    -0.0201     +0.0448      0.4005      0.0665     +0.0620     -0.0104     -0.0000        5.00
+
+────────────────────────────────────────────────────────────
+Ranks  (1 = strongest stress signal per method)
+────────────────────────────────────────────────────────────
+Feature                LogReg(w)     Cohen-d        MW-p     MutInfo    Within-r     PermImp        SHAP    Avg.Rank
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+HR_slope_30                    3           4           1           4           3           2           1         2.6
+HR_mean_5                      1           1           2           5           1           5           3         2.6
+HR_std_30                      2           3           3           3           5           3           2         3.0
+HR_mean_30                     4           2           4           6           2           1           4         3.3
+HRV_30                         5           6           5           1           6           4           5         4.6
+HRV_5                          6           5           6           2           4           6           6         5.0
+
+────────────────────────────────────────────────────────────
+Legend
+────────────────────────────────────────────────────────────
+  LogReg(w)     Raw logistic weight — + = ↑ stress
+  Cohen-d       Effect size (stressed−calm)/pooled σ — + = ↑ stress
+  MW-p          Mann-Whitney p-value — LOWER is more significant
+  MutInfo       Mutual information with label — higher = stronger link
+  Within-r      Mean within-subject Pearson r — + = ↑ stress
+  PermImp       Permutation importance on val set (RF) — higher = more important
+  SHAP          Mean SHAP value (RF, stressed class) — + = pushes toward stressed
+
+
+============================================================
+PART 5 — Online Huber Learning Simulation
+============================================================
+Three conditions (predict-then-learn, all start from LOGISTIC weights):
+  A  Logistic + population z-scores + NO adaptation  (app cold-start)
+  B  Logistic + personal z-scores   + NO adaptation  (normalisation lift only)
+  C  Logistic + personal z-scores   + Huber SGD      (full system, lr=0.05)
+  D  RF cold-start → Huber SGD on distilled logistic (honest end-to-end)
+  Static refs (RF, SVM, etc.) are non-adaptive oracle comparisons only.
+  Bias is always the model's trained value — threshold is always 0.
+
+Subjects: all test subjects with ≥3 labelled samples.
+LifeSnaps test subjects (LS_ prefix) are included alongside EMO.
+
+  [D] Distilling RF into logistic for Condition D …
+  Subjects simulated  : 46 total  (20 EMO, 3 WESAD, 3 Wearable, 20 LifeSnaps)
+  Majority-class baseline              : 68.5%
+  Huber δ=1.0  weight_decay=0.01  lr=0.05  warm-up=50 samples
+
+  ── Three-Condition Comparison (all test subjects) ──────────────────
+  All A/B/C conditions use logistic regression weights as the base model.
+  Static refs (*) are non-adaptive oracle models — shown for context only.
+  Condition                                      micro    macro   vs A (micro)
+                                               (samp-wt)  (subj-wt)
+  ---------------------------------------------------------------------------
+  * Logistic (app model, pop priors)             56.9%        —    +3.2%   [static ref]
+  * SVM (RBF)                                    69.0%        —   +15.3%   [static ref]
+  * Random Forest (300 trees)                    69.9%        —   +16.1%   [static ref]
+  ---------------------------------------------------------------------------
+  A  Logistic + pop priors, no adaptation              53.7%    48.2%              —
+  B  Logistic + personal priors, no adaptation         56.9%    54.4%    +3.2%
+  C  Logistic + personal + Huber SGD (≥50 samples)    91.6%    74.8%   +37.8%
+  D  RF cold-start → Huber SGD (all samples)          62.8%    44.7%    +9.1%
+  D' RF cold-start → Huber SGD (post warm-up only)    89.9%    72.3%   +36.1%  ← Huber phase alone
+
+     Majority-class baseline              : 68.5%
+     Logistic cold-start (A) vs majority : -14.7%  ← below majority without personalisation
+
+     vs best static non-adaptive model (Random Forest (300 trees)):
+       micro (sample-weighted) : +21.7%
+       macro (subject-averaged): +4.9%
+
+     Personalisation lift  (A→B) micro/macro : +3.2% / +6.2%
+     Huber adaptation lift (B→C) micro/macro : +34.6% / +20.4%
+     Full system lift      (A→C) micro/macro : +37.8% / +26.6%
+
+  Note: micro = sample-weighted (large subjects dominate).
+        macro = subject-weighted (each person counts equally).
+
+  ── Per-Dataset Breakdown ───────────────────────────────────────────
+  Dataset              N subj   A (pop)   B (pers)   C (Huber)     A→B     B→C
+  -----------------------------------------------------------------------------
+  EMO (K-EmoPhone)         20     43.0%      53.9%       67.2%  +10.9%  +13.3%
+  WESAD                     3     53.0%      71.4%      100.0%  +18.5%  +28.6%
+  Wearable (Exam)           3     65.2%      62.5%       98.8%   -2.8%  +36.3%
+  LifeSnaps                20     49.1%      50.3%       70.4%   +1.1%  +20.1%
+
+  ── Accuracy vs Feedback Count (lr=0.05, personal priors) ──
+   After N      lr=0.01(µ/M)      lr=0.05(µ/M)      lr=0.10(µ/M)
+  --------------------------------------------------------------------
+        0 →   74.4%/ 62.5%     79.5%/ 69.2%     79.4%/ 69.0%  
+        1 →   74.5%/ 62.6%     79.7%/ 69.4%     79.6%/ 69.2%  
+        3 →   75.0%/ 62.7%     80.3%/ 69.8%     80.3%/ 69.8%  
+        5 →   75.2%/ 62.6%     80.5%/ 69.7%     80.5%/ 69.8%  
+       10 →   76.2%/ 62.8%     81.5%/ 70.1%     81.3%/ 69.8%  
+       20 →   78.3%/ 62.7%     83.8%/ 70.4%     83.6%/ 71.4%  
+       30 →   81.5%/ 63.3%     86.1%/ 71.6%     85.8%/ 71.0%  
+       50 →   88.6%/ 75.8%     91.6%/ 74.8%     91.6%/ 73.6%  
+       75 →   94.3%/ 70.9%     96.3%/ 73.1%     96.5%/ 71.2%  
+      100 →   96.2%/ 89.5%     98.2%/ 72.9%     98.5%/ 71.6%  
+      150 →   98.6%/ 97.8%     99.6%/ 99.3%     99.8%/ 99.7%  
+      200 →   98.3%/ 97.2%     99.5%/ 99.1%     99.8%/ 99.6%  
+
+  ── Per-Subject Breakdown  (lr=0.05, after 50 warm-up samples) ──
+  Subject      DS       N   A (pop)   B (pers)    C (Huber)  D (RF→Huber)
+  ------------------------------------------------------------------------------------------
+  EX_S10_F     EX     759     58.9%      55.9%       99.7%   -3.0%  +43.9%  +40.8%   99.2%/ 99.7%
+  EX_S10_M1    EX     380     81.3%      81.6%       98.2%   +0.3%  +16.6%  +16.9%   85.0%/ 97.9%
+  EX_S10_M2    EX     423     62.2%      57.2%       97.6%   -5.0%  +40.4%  +35.4%   96.0%/ 95.4%
+  LS_621e2ed667b776a24085d8d1 LS      45     51.1%      55.6%         n/a   +4.4%     n/a     n/a            n/a
+  LS_621e2f3967b776a240c654db LS      69     52.2%      60.9%       89.5%   +8.7%  +28.6%  +37.3%   36.2%/ 84.2%
+  LS_621e2f7a67b776a240f14425 LS      69     18.8%      60.9%       78.9%  +42.0%  +18.1%  +60.1%   43.5%/ 78.9%
+  LS_621e2f9167b776a240011ccb LS      55     36.4%      30.9%       80.0%   -5.5%  +49.1%  +43.6%   43.6%/  0.0%
+  LS_621e2fb367b776a24015accd LS      73     52.1%      46.6%       73.9%   -5.5%  +27.3%  +21.9%   56.2%/ 78.3%
+  LS_621e2fce67b776a240279baa LS      60     40.0%      33.3%       80.0%   -6.7%  +46.7%  +40.0%   45.0%/ 20.0%
+  LS_621e2ff067b776a2403eb737 LS      31     58.1%      51.6%         n/a   -6.5%     n/a     n/a            n/a
+  LS_621e30c867b776a240d4aa6c LS      54     40.7%      55.6%       75.0%  +14.8%  +19.4%  +34.3%   31.5%/ 75.0%
+  LS_621e323667b776a240f19134 LS      55     61.8%      60.0%       80.0%   -1.8%  +20.0%  +18.2%   38.2%/ 80.0%
+  LS_621e324e67b776a2400191cb LS      61     73.8%      62.3%      100.0%  -11.5%  +37.7%  +26.2%   41.0%/100.0%
+  LS_621e326767b776a24012e179 LS      44     61.4%      65.9%         n/a   +4.5%     n/a     n/a            n/a
+  LS_621e329067b776a2402ffad2 LS      38     39.5%      44.7%         n/a   +5.3%     n/a     n/a            n/a
+  LS_621e32af67b776a24045b4cf LS     123     48.8%      35.8%       60.3%  -13.0%  +24.5%  +11.5%   56.9%/ 53.4%
+  LS_621e335a67b776a240bb12ff LS      45     64.4%      57.8%         n/a   -6.7%     n/a     n/a            n/a
+  LS_621e337667b776a240ce78ab LS      61     47.5%      57.4%       72.7%   +9.8%  +15.4%  +25.2%   39.3%/ 72.7%
+  LS_621e33b067b776a240f39e56 LS      55     38.2%      36.4%        0.0%   -1.8%  -36.4%  -38.2%   58.2%/ 80.0%
+  LS_621e33cf67b776a240087de9 LS      49     46.9%      36.7%         n/a  -10.2%     n/a     n/a            n/a
+  LS_621e351a67b776a240f6204b LS      44     56.8%      65.9%         n/a   +9.1%     n/a     n/a            n/a
+  LS_621e362467b776a2404ad513 LS      50     56.0%      56.0%         n/a   +0.0%     n/a     n/a            n/a
+  LS_621e36f967b776a240e5e7c9 LS      61     50.8%      50.8%       63.6%   +0.0%  +12.8%  +12.8%   54.1%/ 45.5%
+  P60          EMO     52     38.5%      48.1%       50.0%   +9.6%   +1.9%  +11.5%   26.9%/100.0%
+  P61          EMO     73     42.5%      56.2%       73.9%  +13.7%  +17.7%  +31.4%   46.6%/ 73.9%
+  P62          EMO     40     52.5%      60.0%         n/a   +7.5%     n/a     n/a            n/a
+  P63          EMO     52     42.3%      57.7%       50.0%  +15.4%   -7.7%   +7.7%   40.4%/100.0%
+  P64          EMO     81     50.6%      54.3%       74.2%   +3.7%  +19.9%  +23.6%   46.9%/ 74.2%
+  P66          EMO    101     42.6%      50.5%       54.9%   +7.9%   +4.4%  +12.3%   46.5%/ 43.1%
+  P67          EMO     63     42.9%      60.3%       76.9%  +17.5%  +16.6%  +34.1%   38.1%/ 84.6%
+  P68          EMO     41     43.9%      58.5%         n/a  +14.6%     n/a     n/a            n/a
+  P69          EMO     77     41.6%      51.9%       77.8%  +10.4%  +25.8%  +36.2%   53.2%/ 77.8%
+  P70          EMO     77     59.7%      44.2%       55.6%  -15.6%  +11.4%   -4.2%   58.4%/ 51.9%
+  P71          EMO     48     64.6%      47.9%         n/a  -16.7%     n/a     n/a            n/a
+  P72          EMO     58     31.0%      63.8%       62.5%  +32.8%   -1.3%  +31.5%   29.3%/ 62.5%
+  P73          EMO     26     38.5%      57.7%         n/a  +19.2%     n/a     n/a            n/a
+  P74          EMO     23     43.5%      26.1%         n/a  -17.4%     n/a     n/a            n/a
+  P75          EMO     99     32.3%      56.6%       71.4%  +24.2%  +14.9%  +39.1%   43.4%/ 71.4%
+  P76          EMO     66     47.0%      57.6%       62.5%  +10.6%   +4.9%  +15.5%   39.4%/ 50.0%
+  P77          EMO     44     34.1%      50.0%         n/a  +15.9%     n/a     n/a            n/a
+  P78          EMO     49     46.9%      55.1%         n/a   +8.2%     n/a     n/a            n/a
+  P79          EMO     57     22.8%      52.6%       85.7%  +29.8%  +33.1%  +62.9%   28.1%/ 85.7%
+  P80          EMO     39     43.6%      59.0%         n/a  +15.4%     n/a     n/a            n/a
+  W_S15        W       56     58.9%      66.1%      100.0%   +7.1%  +33.9%  +41.1%   37.5%/ 66.7%
+  W_S16        W       55     49.1%      81.8%      100.0%  +32.7%  +18.2%  +50.9%   38.2%/ 80.0%
+  W_S17        W       57     50.9%      66.7%      100.0%  +15.8%  +33.3%  +49.1%   40.4%/ 85.7%
+
+======================================================================
+SUMMARY STATISTICS
+======================================================================
+
+  ── Dataset Composition ─────────────────────────────────────────────
+  Dataset               Subjects   Windows  Stressed      Calm  %Stressed
+  ----------------------------------------------------------------------
+  EMO                         77      4062      1433      2629      35.3%
+  WESAD                       15       855       332       523      38.8%
+  Wearable                    30     14484      3666     10818      25.3%
+  LifeSnaps                   59      1634       661       973      40.5%
+  ----------------------------------------------------------------------
+  TOTAL                      181     21035      6092     14943      29.0%
+
+  ── Population Priors  (calm training windows) ──────────────────────
+  Feature              mean        std     median     nan%
+  --------------------------------------------------------
+  HR_mean_30          99.41      22.06      93.44     0.0%
+  HR_std_30           13.19       7.21      12.26     0.0%
+  HR_slope_30          0.13       2.84       0.04     0.0%
+  HRV_30              68.04      17.08      66.75     0.0%
+  HR_mean_5          100.85      24.64      94.80     0.0%
+  HRV_5               66.03      17.28      65.46     0.0%
+
+  ── Model Performance  (test set) ───────────────────────────────────
+  Majority-class baseline              : 68.5%
+  Logistic (personalised z-scores)     : 56.9%  (lift -11.6%)
+  Random Forest (population z-scores)  : 69.9%  (lift +1.4%)
+
+  ── Personalisation Analysis  (PART 5 conditions) ──────────────────
+  Note: 'Personal priors' = per-user calm baseline from their own data.
+  Note: 'Huber' = after 20 feedback samples per user (lr=0.05).
+
+  Condition                                           Accuracy
+  -------------------------------------------------------------
+  A  Population priors, no adaptation (app cold-start)     see PART 5
+  B  Personal priors, no adaptation                        see PART 5
+  C  Personal priors + Huber SGD (20 samples)              see PART 5
+
+  Key finding: the population-level model (A) performs BELOW the
+  majority-class baseline. Stress classification is not viable without
+  personalising to each user's physiological baseline.
+  Huber SGD reaches ~70%+ after only 20 labelled feedback taps.
+
+  Hyperparams: huber_delta=1.0  lr=0.05  weight_decay=0.01
+  Features   : HR_mean_30, HR_std_30, HR_slope_30, HRV_30, HR_mean_5, HRV_5
+  Train/test overlap check: PASSED (0 shared subjects)
+======================================================================
+Unable to process request - PLA Update available
+You currently don't have access to this membership resource. To resolve this issue, agree to the latest Program License Agreement in your developer account.
+
+No signing certificate "iOS Distribution" found
+No "iOS Distribution" signing certificate matching team ID "99DA87P22W" with a private key was found.

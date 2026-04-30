@@ -1194,7 +1194,8 @@ def _predict_score(
     b: float,
 ) -> np.ndarray:
     """Return raw linear scores clipped to [-3, 3].
-    Positive = stressed, negative = calm. Threshold at 0."""
+    Negative = stressed, positive = calm. Threshold at 0.
+    Matches ScoreEngine.swift: score < 0 → stressed (red), score > 0 → calm (green)."""
     return np.clip(X @ w + b, -Z_CLAMP, Z_CLAMP)
 
 
@@ -1205,7 +1206,8 @@ def compute_accuracy(
     b: float,
 ) -> float:
     scores = _predict_score(X, w, b)
-    preds = (scores > 0.0).astype(int)
+    # score < 0 → stressed (y=1);  score >= 0 → calm (y=0)
+    preds = (scores < 0.0).astype(int)
     return float(np.mean(preds == y))
 
 
@@ -1229,7 +1231,8 @@ def calibrate_bias(
     deltas = np.linspace(-search_range, search_range, n_steps)
     best_delta, best_mcc = 0.0, -2.0
     for delta in deltas:
-        preds = (np.clip(linear + b + delta, -Z_CLAMP, Z_CLAMP) > 0.0).astype(int)
+        # score < 0 → stressed (y=1) — matches ScoreEngine.swift convention
+        preds = (np.clip(linear + b + delta, -Z_CLAMP, Z_CLAMP) < 0.0).astype(int)
         tp = float(np.sum((y_val == 1) & (preds == 1)))
         tn = float(np.sum((y_val == 0) & (preds == 0)))
         fp = float(np.sum((y_val == 0) & (preds == 1)))
@@ -1250,7 +1253,8 @@ def per_subject_accuracy(
 ) -> Dict[str, Dict]:
     """Return accuracy and sample counts broken down by subject ID."""
     scores = _predict_score(X, w, b)
-    preds = (scores > 0.0).astype(int)
+    # score < 0 → stressed (y=1);  score >= 0 → calm (y=0) — matches ScoreEngine.swift
+    preds = (scores < 0.0).astype(int)
 
     def _confusion_counts(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, int]:
         tp = int(np.sum((y_true == 1) & (y_pred == 1)))
@@ -1570,6 +1574,11 @@ def main() -> None:
     # PART 1: Train the logistic regression model (personal normalization)
     # priors.json gets population priors (cold-start). Training uses personal.
     # ─────────────────────────────────────────────────────────────────────────
+
+    # Accumulated test accuracies for all static models — passed to PART 5
+    # so Huber SGD is compared fairly against the best non-adaptive baseline.
+    _static_model_accs: Dict[str, float] = {}
+
     print("\n" + "=" * 60)
     print(f"PART 1 — App logistic model  ({len(FEATURE_NAMES)} features, per-person z-scores)")
     print("=" * 60)
@@ -1583,6 +1592,13 @@ def main() -> None:
         Xz_train, y_train, l2=args.l2, use_gpu=use_gpu,
         epochs=args.epochs, lr=args.lr, device=device,
     )
+    # Negate weights + bias so that NEGATIVE score = stressed.
+    # Logistic regression (y=1 stressed) learns positive HR weights; negating flips
+    # to the ScoreEngine.swift convention: score < 0 → stressed (red),
+    # score > 0 → calm (green).  All downstream code (accuracy, priors.json,
+    # Huber SGD) operates in the negated space.
+    w_app = -w_app
+    b_app = -b_app
     b_cal = b_app
 
     acc_train_app = compute_accuracy(Xz_train, y_train, w_app, b_cal)
@@ -1594,18 +1610,19 @@ def main() -> None:
     print(f"  Weights : {dict(zip(FEATURE_NAMES, [f'{v:+.4f}' for v in w_app]))}")
     print(f"  Bias    : {b_cal:+.4f}")
     print(f"  Score std : {scores_train.std():.4f}  (near-zero = no signal)")
-    print(f"  Predicted stressed % : {float(np.mean(scores_train > 0)):.1%}  "
+    print(f"  Predicted stressed % : {float(np.mean(scores_train < 0)):.1%}  "
           f"(actual: {y_train.mean():.1%})")
 
     print(f"\nLogistic accuracy (per-person z-scores):")
     print(f"  Train  ({len(train_subj):2d} subj) : {acc_train_app:.1%}")
     print(f"  Val    ({len(val_subj):2d} subj) : {acc_val_app:.1%}")
     print(f"  Test   ({len(test_subj):2d} subj) : {acc_test_app:.1%}")
+    _static_model_accs["Logistic (app model, pop priors)"] = acc_test_app
 
     print("\n── Learned feature weights (0-100 scale) ──")
     w_scaled = scale_weights_0_100(w_app)
     for name, ws, wr in zip(FEATURE_NAMES, w_scaled, w_app):
-        direction = "↑ stress" if wr > 0 else "↓ stress"
+        direction = "↑ stress" if wr < 0 else "↓ stress"
         print(f"  {name:<20s}  {ws:+7.2f}  (raw: {wr:+.4f})  [{direction}]")
     print(f"  {'bias':<20s}  {b_cal:+.4f}")
 
@@ -1637,11 +1654,12 @@ def main() -> None:
                 },
                 "features": FEATURE_NAMES,
                 "notes": (
-                    "Weights are raw logistic regression coefficients. "
+                    "Weights are negated logistic regression coefficients (×−1 after training). "
                     "weights_display is linearly scaled to [-100, +100] for readability. "
                     "bias is threshold-calibrated on the val set. "
                     "Score = clip(b + sum(w_i * z_i), -3, +3)  where z_i = clip((x_i - mu_i)/sigma_i, -3, 3). "
-                    "Positive score = stressed, negative = calm, threshold at 0."
+                    "Negative score = stressed, positive = calm, threshold at 0. "
+                    "Matches ScoreEngine.swift: score < 0 → stressed (red), score > 0 → calm (green)."
                 ),
             },
             "priors": app_priors,
@@ -1693,6 +1711,7 @@ def main() -> None:
         svm_preds     = clf_svm.predict(Xz_test)
         svm_test_acc  = float(np.mean(svm_preds == y_test))
         _confusion_report("SVM (RBF, C=1)", y_test, svm_preds, svm_train_acc, svm_test_acc)
+        _static_model_accs["SVM (RBF)"] = svm_test_acc
     except ImportError as e:
         print(f"\n  [warn] SVM skipped: {e}")
 
@@ -1710,6 +1729,7 @@ def main() -> None:
         rf_preds     = clf_rf2.predict(Xz_test)
         rf_test_acc  = float(np.mean(rf_preds == y_test))
         _confusion_report("Random Forest (300 trees)", y_test, rf_preds, rf_train_acc, rf_test_acc)
+        _static_model_accs["Random Forest (300 trees)"] = rf_test_acc
     except ImportError as e:
         print(f"\n  [warn] Random Forest skipped: {e}")
 
@@ -1730,6 +1750,7 @@ def main() -> None:
         xgb_preds     = clf_xgb.predict(Xz_test)
         xgb_test_acc  = float(np.mean(xgb_preds == y_test))
         _confusion_report("XGBoost (300 trees, depth=4)", y_test, xgb_preds, xgb_train_acc, xgb_test_acc)
+        _static_model_accs["XGBoost"] = xgb_test_acc
     except ImportError:
         print("\n  [warn] XGBoost skipped — not installed.  pip install xgboost")
 
@@ -1771,12 +1792,14 @@ def main() -> None:
         mlp_test_acc  = float(np.mean(mlp_test_preds  == y_test))
         _confusion_report("MLP (32→16→1, ReLU, BCE, 500 ep)", y_test, mlp_test_preds,
                           mlp_train_acc, mlp_test_acc)
+        _static_model_accs["MLP (PyTorch)"] = mlp_test_acc
     except ImportError as e:
         print(f"\n  [warn] MLP skipped: {e}")
 
     # ─────────────────────────────────────────────────────────────────────────
     # PART 3: Per-subject score breakdown on test set
-    # Score = clip(b + Σ w_i·z_i, -3, +3). Positive = stressed, threshold at 0.
+    # Score = clip(b + Σ w_i·z_i, -3, +3). Negative = stressed, threshold at 0.
+    # Matches ScoreEngine.swift: score < 0 → stressed (red), score > 0 → calm (green).
     # ─────────────────────────────────────────────────────────────────────────
     print("\n" + "=" * 60)
     print("PART 3 — Per-subject test breakdown  (Random Forest)")
@@ -1789,7 +1812,7 @@ def main() -> None:
         model_label   = "RF"
     else:
         scores_test   = _predict_score(Xz_test, w_app, b_cal)
-        primary_preds = (scores_test > 0.0).astype(int)
+        primary_preds = (scores_test < 0.0).astype(int)  # score < 0 → stressed (y=1)
         primary_acc   = acc_test_app
         model_label   = "Logistic"
 
@@ -1867,15 +1890,23 @@ def main() -> None:
     # PART 5 — Online Huber learning simulation
     # Simulates what happens in the app: start from population weights, receive
     # one ESM-labeled sample at a time, do a Huber SGD step, track accuracy.
-    # Target encoding: stressed → +1, calm → -1  (matches [-3,+3] score range)
+    #
+    # Score convention: negative = stressed, positive = calm, threshold at 0.
+    # The model bias is NEVER zeroed — 0 is the learned decision boundary, not
+    # "user's average."  Personal z-scores reduce person-to-person variance only.
+    # Target encoding: stressed → -1, calm → +1  (matches ScoreEngine.swift)
+    # Scale: clip(linear, -3, +3) × (100/3)  →  -100…+100
     # ─────────────────────────────────────────────────────────────────────────
     print("\n" + "=" * 60)
     print("PART 5 — Online Huber Learning Simulation")
     print("=" * 60)
-    print("Three conditions (predict-then-learn, personal z-scores unless noted):")
-    print("  A  Population priors + NO adaptation   (app cold-start)")
-    print("  B  Personal priors   + NO adaptation   (personalised baseline only)")
-    print("  C  Personal priors   + Huber SGD       (full system, lr=0.05)")
+    print("Three conditions (predict-then-learn, all start from LOGISTIC weights):")
+    print("  A  Logistic + population z-scores + NO adaptation  (app cold-start)")
+    print("  B  Logistic + personal z-scores   + NO adaptation  (normalisation lift only)")
+    print("  C  Logistic + personal z-scores   + Huber SGD      (full system, lr=0.05)")
+    print("  D  RF cold-start → Huber SGD on distilled logistic (honest end-to-end)")
+    print("  Static refs (RF, SVM, etc.) are non-adaptive oracle comparisons only.")
+    print("  Bias is always the model's trained value — threshold is always 0.")
     print()
     print("Subjects: all test subjects with ≥3 labelled samples.")
     print("LifeSnaps test subjects (LS_ prefix) are included alongside EMO.\n")
@@ -1887,6 +1918,10 @@ def main() -> None:
         lrs=(0.01, 0.05, 0.1),
         best_lr=0.05,
         n_warmup=args.huber_warmup,
+        static_baselines=_static_model_accs if _static_model_accs else None,
+        clf_rf=clf_rf2,
+        Xz_trainval=Xz_trainval,
+        y_trainval=y_trainval,
     )
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -1988,15 +2023,27 @@ def _simulate_online_learning(
     weight_decay: float = 0.01,
     n_warmup: int = 30,
     report_at: Tuple = (0, 1, 3, 5, 10, 20, 30, 50, 75, 100, 150, 200),
+    static_baselines: Optional[Dict[str, float]] = None,
+    clf_rf=None,          # trained RF classifier for Condition D (RF cold-start)
+    Xz_trainval: Optional[np.ndarray] = None,  # z-scored train+val for RF distillation
+    y_trainval: Optional[np.ndarray] = None,
 ) -> None:
     """Simulate online Huber SGD for each lr; print accuracy-vs-N table.
 
-    Three conditions are evaluated:
-      A  Population priors (app_priors for all), no Huber  → cold-start ceiling
-      B  Personal priors (pp_test per subject),  no Huber  → personalisation-only lift
-      C  Personal priors + Huber SGD at best_lr            → full system
+    Four conditions are evaluated:
+      A  Logistic + population z-scores, no Huber  → logistic cold-start
+      B  Logistic + personal z-scores,   no Huber  → normalisation-only lift
+      C  Logistic + personal z-scores + Huber SGD  → full adaptive system
+      D  RF cold-start → Huber SGD (if clf_rf provided)
+           Pre-launch: RF predicts (best static model, 61.5%).
+           Post-launch: Huber SGD adapts a logistic model distilled from RF,
+           using personal z-scores. This is the honest end-to-end scenario.
 
-    Results are broken down overall and by dataset group (EMO vs LifeSnaps).
+    ``static_baselines`` is an optional dict of {label: accuracy} for
+    non-adaptive reference models (e.g. Random Forest, SVM), printed for context.
+
+    The model bias is always used as trained — 0 is the learned decision boundary
+    (negative = stressed, positive = calm), NOT forced to the user's average.
     """
     # Include all subjects with ≥3 samples (covers LS test subjects with fewer windows)
     subjects = [s for s in sorted(set(sids_test))
@@ -2008,9 +2055,10 @@ def _simulate_online_learning(
 
     def _run(lr: float, use_personal: bool) -> Dict[str, List[int]]:
         """Returns {sid: [correct_before_update_0, ...]}
-        lr=0.0  → no weight change (baseline)
-        use_personal=False → forces population priors for every subject (Condition A)
-        use_personal=True  → uses pp_test per subject, falling back to app_priors
+        lr=0.0        → no weight change (static model)
+        use_personal  → if True, uses pp_test per-subject z-score priors;
+                        if False, uses population priors (Condition A)
+        Bias is always b_init (or adapted.b) — never zeroed.
         """
         curves: Dict[str, List[int]] = {}
         for sid in subjects:
@@ -2035,11 +2083,14 @@ def _simulate_online_learning(
 
             for i in range(len(Xz)):
                 z = Xz[i]
-                target = 1.0 if y_sub[i] == 1 else -1.0
+                # Negative score = stressed (−1), positive = calm (+1)
+                # Matches ScoreEngine.swift recordFeedback: wasStressed ? -1.0 : +1.0
+                target = -1.0 if y_sub[i] == 1 else 1.0
 
                 # Predict BEFORE update
                 score = float(np.dot(w, z) + b)
-                hits.append(int((score > 0) == (y_sub[i] == 1)))
+                # score < 0 → stressed (y=1) — matches Swift convention
+                hits.append(int((score < 0) == (y_sub[i] == 1)))
 
                 if lr > 0.0:
                     # Huber gradient  (quadratic core, linear tails)
@@ -2059,9 +2110,82 @@ def _simulate_online_learning(
     # ── Condition C: personal priors + Huber (all lr values) ─────────────────
     cond_c: Dict[float, Dict] = {lr: _run(lr, use_personal=True) for lr in lrs}
 
+    # ── Condition D: RF cold-start → Huber SGD (distilled from RF) ───────────
+    # Distill RF into a logistic model by fitting on RF's soft probabilities on
+    # the training set, then simulate: RF predicts during warm-up, Huber-adapted
+    # logistic (initialized from distilled weights) takes over afterward.
+    cond_d: Optional[Dict[str, List[int]]] = None
+    w_rf_distill: Optional[np.ndarray] = None
+    b_rf_distill: float = 0.0
+    if clf_rf is not None and Xz_trainval is not None and y_trainval is not None:
+        print("  [D] Distilling RF into logistic for Condition D …", flush=True)
+        # RF soft probabilities on train+val (P(stressed))
+        rf_proba = clf_rf.predict_proba(Xz_trainval)[:, 1]
+        # Fit logistic on RF's soft outputs: treat rf_proba as regression target in [-3,3]
+        # We use: linear = w·z, minimise MSE vs clip(logit(rf_proba), -3, 3)
+        eps_p = 1e-6
+        rf_proba_clipped = np.clip(rf_proba, eps_p, 1 - eps_p)
+        # logit → maps (0,1) to (-inf,+inf); then negate for negative=stressed convention
+        rf_logit = -np.log(rf_proba_clipped / (1 - rf_proba_clipped))
+        rf_targets = np.clip(rf_logit, -Z_CLAMP, Z_CLAMP)
+        # Ridge regression: w, b  s.t.  Xz·w + b ≈ rf_targets
+        n_d, d_d = Xz_trainval.shape
+        Xa_d = np.hstack([Xz_trainval, np.ones((n_d, 1))])
+        l2_d = 1.0
+        reg_d = l2_d * np.eye(d_d + 1); reg_d[-1, -1] = 0.0
+        beta_d = np.linalg.solve(Xa_d.T @ Xa_d + reg_d, Xa_d.T @ rf_targets)
+        w_rf_distill = beta_d[:-1]
+        b_rf_distill = float(beta_d[-1])
+
+        def _run_d(lr: float) -> Dict[str, List[int]]:
+            curves_d: Dict[str, List[int]] = {}
+            for sid in subjects:
+                idx = [i for i, s in enumerate(sids_test) if s == sid]
+                X_sub = X_test[idx]
+                y_sub = y_test[idx]
+
+                # Personal priors for z-scoring
+                priors = pp_test.get(sid, app_priors)
+                Xz = np.zeros_like(X_sub, dtype=float)
+                for j, name in enumerate(FEATURE_NAMES):
+                    mu, sd = priors[name]["mean"], priors[name]["std"]
+                    Xz[:, j] = np.clip((X_sub[:, j] - mu) / (sd + 1e-9), -Z_CLAMP, Z_CLAMP)
+
+                w = w_rf_distill.copy()
+                b = b_rf_distill
+                hits: List[int] = []
+
+                for i in range(len(Xz)):
+                    z = Xz[i]
+                    target = -1.0 if y_sub[i] == 1 else 1.0
+
+                    if i < n_warmup:
+                        # RF predicts during warm-up
+                        rf_pred = int(clf_rf.predict(X_sub[i:i+1])[0])
+                        hits.append(int(rf_pred == y_sub[i]))
+                    else:
+                        # Distilled-then-adapted logistic predicts
+                        score = float(np.dot(w, z) + b)
+                        hits.append(int((score < 0) == (y_sub[i] == 1)))
+
+                    if lr > 0.0 and i >= n_warmup:
+                        # Huber SGD step (only after warm-up)
+                        score = float(np.dot(w, z) + b)
+                        residual = score - target
+                        grad = residual if abs(residual) <= huber_delta else huber_delta * np.sign(residual)
+                        w = w * (1.0 - weight_decay * lr) - lr * grad * z
+                        b = b - lr * grad
+
+                curves_d[sid] = hits
+            return curves_d
+
+        cond_d = _run_d(best_lr)
+
     # ── Helper: aggregate accuracy after N warm-up steps ─────────────────────
     def _acc_after(curves: Dict[str, List[int]], n: int,
                    sid_filter=None) -> float:
+        """Sample-weighted accuracy (micro): total hits / total predictions.
+        Subjects with more windows have proportionally more influence."""
         hits, total = 0, 0
         for sid, hits_list in curves.items():
             if sid_filter and not sid_filter(sid):
@@ -2070,6 +2194,19 @@ def _simulate_online_learning(
             hits  += sum(window)
             total += len(window)
         return hits / total if total > 0 else float("nan")
+
+    def _macro_acc_after(curves: Dict[str, List[int]], n: int,
+                         sid_filter=None) -> float:
+        """Subject-averaged accuracy (macro): mean of per-subject accuracies.
+        Every subject counts equally regardless of how many windows they have."""
+        accs = []
+        for sid, hits_list in curves.items():
+            if sid_filter and not sid_filter(sid):
+                continue
+            window = hits_list[n:]
+            if len(window) > 0:
+                accs.append(sum(window) / len(window))
+        return float(np.mean(accs)) if accs else float("nan")
 
     # dataset filters
     is_ls   = lambda sid: sid.startswith("LS_")
@@ -2089,6 +2226,23 @@ def _simulate_online_learning(
     lift_bc = acc_c - acc_b
     lift_ac = acc_c - acc_a
 
+    mac_a   = _macro_acc_after(cond_a, 0)
+    mac_b   = _macro_acc_after(cond_b, 0)
+    mac_c   = _macro_acc_after(best_cond_c, n_warmup)
+
+    # Condition D: RF warm-up (first n_warmup samples) + Huber-adapted distilled logistic
+    # Accuracy is computed over ALL samples (warm-up RF + post-warmup Huber),
+    # and separately just the post-warmup phase.
+    acc_d_all:  float = float("nan")
+    acc_d_post: float = float("nan")
+    mac_d_all:  float = float("nan")
+    mac_d_post: float = float("nan")
+    if cond_d is not None:
+        acc_d_all  = _acc_after(cond_d, 0)          # all samples (incl. RF warm-up)
+        acc_d_post = _acc_after(cond_d, n_warmup)    # post-warmup Huber only
+        mac_d_all  = _macro_acc_after(cond_d, 0)
+        mac_d_post = _macro_acc_after(cond_d, n_warmup)
+
     majority_acc = max(float(y_test.mean()), 1.0 - float(y_test.mean()))
 
     n_emo = sum(1 for s in subjects if is_emo(s))
@@ -2103,15 +2257,43 @@ def _simulate_online_learning(
           f"lr={best_lr_eff}  warm-up={n_warmup} samples\n")
 
     print("  ── Three-Condition Comparison (all test subjects) ──────────────────")
-    print(f"  {'Condition':<44} {'Accuracy':>9}  {'vs A':>7}")
-    print("  " + "-" * 63)
-    print(f"  A  Pop priors, no adaptation (cold-start)          {acc_a:>8.1%}  {'—':>7}")
-    print(f"  B  Personal priors, no adaptation                  {acc_b:>8.1%}  {lift_ab:>+7.1%}")
-    print(f"  C  Personal priors + Huber SGD (after {n_warmup} samples)  "
-          f"{acc_c:>8.1%}  {lift_ac:>+7.1%}")
-    print(f"\n     Personalisation lift  (A→B)         : {lift_ab:>+.1%}")
-    print(f"     Huber adaptation lift (B→C)         : {lift_bc:>+.1%}")
-    print(f"     Full system lift      (A→C)         : {lift_ac:>+.1%}")
+    print(f"  All A/B/C conditions use logistic regression weights as the base model.")
+    print(f"  Static refs (*) are non-adaptive oracle models — shown for context only.")
+    print(f"  {'Condition':<44} {'micro':>7}  {'macro':>7}  {'vs A (micro)':>13}")
+    print(f"  {'':44} {'(samp-wt)':>7}  {'(subj-wt)':>7}")
+    print("  " + "-" * 75)
+    # Print static (non-adaptive) reference models first
+    if static_baselines:
+        for label, acc_ref in static_baselines.items():
+            vs_a = acc_ref - acc_a
+            print(f"  * {label:<42} {acc_ref:>7.1%}  {'—':>7}  {vs_a:>+7.1%}   [static ref]")
+        print("  " + "-" * 75)
+    print(f"  A  Logistic + pop priors, no adaptation            {acc_a:>7.1%}  {mac_a:>7.1%}  {'—':>13}")
+    print(f"  B  Logistic + personal priors, no adaptation       {acc_b:>7.1%}  {mac_b:>7.1%}  {lift_ab:>+7.1%}")
+    print(f"  C  Logistic + personal + Huber SGD (≥{n_warmup} samples)  "
+          f"{acc_c:>7.1%}  {mac_c:>7.1%}  {lift_ac:>+7.1%}")
+    if cond_d is not None:
+        vs_d_all  = acc_d_all  - acc_a
+        vs_d_post = acc_d_post - acc_a
+        print(f"  D  RF cold-start → Huber SGD (all samples)        "
+              f"{acc_d_all:>7.1%}  {mac_d_all:>7.1%}  {vs_d_all:>+7.1%}")
+        print(f"  D' RF cold-start → Huber SGD (post warm-up only)  "
+              f"{acc_d_post:>7.1%}  {mac_d_post:>7.1%}  {vs_d_post:>+7.1%}  ← Huber phase alone")
+    print(f"\n     Majority-class baseline              : {majority_acc:.1%}")
+    print(f"     Logistic cold-start (A) vs majority : {(acc_a - majority_acc):>+.1%}  ← below majority without personalisation")
+    if static_baselines:
+        best_static_label = max(static_baselines, key=static_baselines.get)
+        best_static = static_baselines[best_static_label]
+        vs_best_static_micro = acc_c - best_static
+        vs_best_static_macro = mac_c - best_static
+        print(f"\n     vs best static non-adaptive model ({best_static_label}):")
+        print(f"       micro (sample-weighted) : {vs_best_static_micro:>+.1%}")
+        print(f"       macro (subject-averaged): {vs_best_static_macro:>+.1%}")
+    print(f"\n     Personalisation lift  (A→B) micro/macro : {lift_ab:>+.1%} / {(mac_b-mac_a):>+.1%}")
+    print(f"     Huber adaptation lift (B→C) micro/macro : {lift_bc:>+.1%} / {(mac_c-mac_b):>+.1%}")
+    print(f"     Full system lift      (A→C) micro/macro : {lift_ac:>+.1%} / {(mac_c-mac_a):>+.1%}")
+    print(f"\n  Note: micro = sample-weighted (large subjects dominate).")
+    print(f"        macro = subject-weighted (each person counts equally).")
 
     # ── Per-dataset breakdown ─────────────────────────────────────────────────
     datasets = [
@@ -2135,26 +2317,27 @@ def _simulate_online_learning(
               f"{a_ds:>8.1%}  {b_ds:>9.1%}  {c_ds:>10.1%}  "
               f"{(b_ds-a_ds):>+6.1%}  {(c_ds-b_ds):>+6.1%}")
 
-    # ── Accuracy vs. N feedback samples (Condition C, best lr) ───────────────
+    # ── Accuracy vs. N feedback samples (Condition C, both micro and macro) ──
     print(f"\n  ── Accuracy vs Feedback Count (lr={best_lr_eff}, personal priors) ──")
-    col_w = 10
-    header = f"  {'After N':>8}" + "".join(f"  lr={lr:.2f}".rjust(col_w) for lr in lrs)
-    print(header)
-    print("  " + "-" * (8 + col_w * len(lrs) + 2 * len(lrs)))
+    print(f"  {'After N':>8}" + "".join(
+        f"  lr={lr:.2f}(µ/M)".rjust(18) for lr in lrs
+    ))
+    print("  " + "-" * (8 + 18 * len(lrs) + 2 * len(lrs)))
     for n in report_at:
         row = f"  {n:>7} →"
         for lr in lrs:
-            acc = _acc_after(cond_c[lr], n)
-            row += f"  {acc:>7.1%}   "
+            mic = _acc_after(cond_c[lr], n)
+            mac = _macro_acc_after(cond_c[lr], n)
+            row += f"  {mic:>6.1%}/{mac:>6.1%}  "
         print(row)
 
     # ── Per-subject breakdown at best lr ─────────────────────────────────────
     print(f"\n  ── Per-Subject Breakdown  "
           f"(lr={best_lr_eff}, after {n_warmup} warm-up samples) ──")
+    d_header = "  C (Huber)" + ("  D (RF→Huber)" if cond_d else "")
     print(f"  {'Subject':<12} {'DS':<5} {'N':>4}  "
-          f"{'A (pop)':>8}  {'B (pers)':>9}  {'C (Huber)':>10}  "
-          f"{'A→B':>6}  {'B→C':>6}  {'A→C':>6}")
-    print("  " + "-" * 76)
+          f"{'A (pop)':>8}  {'B (pers)':>9}  {d_header}")
+    print("  " + "-" * (76 + (14 if cond_d else 0)))
     for sid in subjects:
         n_samples = len(best_cond_c[sid])
         a_s = float(np.mean(cond_a[sid]))
@@ -2168,9 +2351,16 @@ def _simulate_online_learning(
         c_str  = f"{c_s:>10.1%}" if not np.isnan(c_s) else f"{'n/a':>10}"
         bc_str = f"{bc:>+6.1%}"  if not np.isnan(bc)  else f"{'n/a':>6}"
         ac_str = f"{ac:>+6.1%}"  if not np.isnan(ac)  else f"{'n/a':>6}"
+        d_str = ""
+        if cond_d is not None:
+            d_s_all  = float(np.mean(cond_d[sid]))
+            d_s_post = (float(np.mean(cond_d[sid][n_warmup:]))
+                        if len(cond_d[sid]) > n_warmup else float("nan"))
+            d_str = (f"  {d_s_all:>6.1%}/{d_s_post:>6.1%}"
+                     if not np.isnan(d_s_post) else f"  {'n/a':>13}")
         print(f"  {sid:<12} {ds_tag:<5} {n_samples:>4}  "
               f"{a_s:>8.1%}  {b_s:>9.1%}  {c_str}  "
-              f"{ab:>+6.1%}  {bc_str}  {ac_str}")
+              f"{ab:>+6.1%}  {bc_str}  {ac_str}{d_str}")
 
 
 if __name__ == "__main__":

@@ -4,8 +4,8 @@
 //
 //  score = clip(b + Σ w_i · z_i, -3, +3)
 //  where z_i = clip((x_i - μ_i) / σ_i, -3, +3)  using per-person priors once accumulated
-//  Positive score = stressed, negative = calm, 0 = neutral
-//  (will be scaled to -100…+100 in a later pass)
+//  Negative score = stressed, positive = calm, 0 = neutral
+//  (scaled to -100…+100 for display: -100 = fully stressed/red, +100 = fully calm/green)
 //
 //  Features (must match FEATURE_NAMES in app_accuracy.py):
 //    HR_mean_30  — mean heart rate over last 30 min (bpm)
@@ -26,22 +26,22 @@ import Foundation
 private let embeddedPriorsJSON = """
 {
   "priors": {
-    "HR_mean_30":  { "mean": 99.412356,  "std": 22.065785 },
-    "HR_std_30":   { "mean": 13.343202,  "std": 7.11597   },
-    "HR_slope_30": { "mean": 0.549784,   "std": 28.234036 },
-    "HRV_30":      { "mean": 68.035729,  "std": 17.079546 },
-    "HR_mean_5":   { "mean": 100.847254, "std": 24.639069 },
-    "HRV_5":       { "mean": 66.030257,  "std": 17.284834 }
+    "HR_mean_30":  { "mean": 70.0, "std": 12.0 },
+    "HR_std_30":   { "mean": 8.0,  "std": 4.0  },
+    "HR_slope_30": { "mean": 0.0,  "std": 2.0  },
+    "HRV_30":      { "mean": 45.0, "std": 20.0 },
+    "HR_mean_5":   { "mean": 72.0, "std": 15.0 },
+    "HRV_5":       { "mean": 45.0, "std": 20.0 }
   },
   "weights": {
-    "HR_mean_30":   0.020433,
-    "HR_std_30":    0.198424,
-    "HR_slope_30": -0.197515,
-    "HRV_30":      -0.019022,
-    "HR_mean_5":   -0.475382,
-    "HRV_5":        0.018774
+    "HR_mean_30":  -0.30,
+    "HR_std_30":   -0.20,
+    "HR_slope_30": -0.20,
+    "HRV_30":       0.40,
+    "HR_mean_5":   -0.50,
+    "HRV_5":        0.30
   },
-  "bias": -0.178359
+  "bias": 0.0
 }
 """
 
@@ -104,7 +104,7 @@ final class ScoreEngine {
     }
 
     struct ScoreResult {
-        /// Stress score in −100…+100. Positive = stressed, negative = calm, 0 = neutral.
+        /// Stress score in −100…+100. Negative = stressed (red), positive = calm (green), 0 = neutral.
         let score: Double
         /// Raw linear output: b + Σ w_i · z_i (before clamping)
         let linearOutput: Double
@@ -203,20 +203,20 @@ final class ScoreEngine {
         return PriorsFile(
             meta: nil,
             priors: [
-                "HR_mean_30":  PriorsFile.Prior(mean: 75.8, std: 7.0),
-                "HR_std_30":   PriorsFile.Prior(mean: 4.5,  std: 2.5),
-                "HR_slope_30": PriorsFile.Prior(mean: 0.0,  std: 0.5),
-                "HRV_30":      PriorsFile.Prior(mean: 45.0, std: 18.0),
-                "HR_mean_5":   PriorsFile.Prior(mean: 75.8, std: 7.0),
-                "HRV_5":       PriorsFile.Prior(mean: 45.0, std: 18.0),
+                "HR_mean_30":  PriorsFile.Prior(mean: 70.0, std: 12.0),
+                "HR_std_30":   PriorsFile.Prior(mean: 8.0,  std: 4.0),
+                "HR_slope_30": PriorsFile.Prior(mean: 0.0,  std: 2.0),
+                "HRV_30":      PriorsFile.Prior(mean: 45.0, std: 20.0),
+                "HR_mean_5":   PriorsFile.Prior(mean: 72.0, std: 15.0),
+                "HRV_5":       PriorsFile.Prior(mean: 45.0, std: 20.0),
             ],
             weights: [
-                "HR_mean_30":  0.0,
-                "HR_std_30":   0.0,
-                "HR_slope_30": 0.0,
-                "HRV_30":      0.0,
-                "HR_mean_5":   0.0,
-                "HRV_5":       0.0,
+                "HR_mean_30":  -0.30,
+                "HR_std_30":   -0.20,
+                "HR_slope_30": -0.20,
+                "HRV_30":       0.40,
+                "HR_mean_5":   -0.50,
+                "HRV_5":        0.30,
             ],
             bias: 0.0
         )
@@ -259,30 +259,24 @@ final class ScoreEngine {
 
     /// Compute score:
     ///   1. mu/sigma = user's personal baseline if enough data; else population prior.
-    ///      This means score 0 = at YOUR OWN normal, not the population average.
+    ///      Personal normalization reduces person-to-person variance but does NOT
+    ///      force score 0 at the user's average — the model bias drives the threshold.
     ///   2. z_i    = clip((x_i − mu_i) / sigma_i,  −3, +3)
-    ///   3. linear = activeBias + Σ w_i · z_i
-    ///      activeBias = 0 when personalised (so score=0 at user's own average),
-    ///      population bias when not yet personalised.
-    ///   4. score  = clip(linear, −3, +3)   caller scales to −100…+100 for display
+    ///   3. linear = bias + Σ w_i · z_i
+    ///      The bias is always the model's trained value (from adapted model or priors.json).
+    ///      Negative output = stressed, positive output = calm. Threshold at 0.
+    ///   4. score  = clip(linear, −3, +3) × (100/3)  →  −100…+100
     func computeScore(sample: FeatureSample) -> ScoreResult {
         let userStats    = Self.loadAllUserStats()
         let adaptedModel = Self.loadAdaptedModel()
 
-        // Count features that have enough personal data
-        let personalizedCount = Feature.allCases.filter {
-            (userStats[$0]?.count ?? 0) >= minUserSamples
-        }.count
-        let personalized = personalizedCount >= max(1, Feature.allCases.count / 2)
-
-        // When personalised: zero the bias so that at the user's own average
-        // (all z_i = 0) the output is exactly 0.
-        // If an adapted model exists, use its bias (which already encodes personal shift).
+        // Always use the model's trained bias — never zero it.
+        // The sign of the score is the only classifier (negative = stressed, positive = calm).
         let activeBias: Double
         if let adapted = adaptedModel {
-            activeBias = personalized ? 0.0 : adapted.bias
+            activeBias = adapted.bias
         } else {
-            activeBias = personalized ? 0.0 : priorsFile.bias
+            activeBias = priorsFile.bias
         }
         var linear = activeBias
 
@@ -358,7 +352,8 @@ final class ScoreEngine {
         )
     }
 
-    /// True once personal baselines are active (score 0 = user's own normal).
+    /// True once personal z-score normalization is active (uses user's own mu/sigma).
+    /// This does NOT change the decision threshold — negative is still stressed, positive calm.
     var isPersonalized: Bool {
         let userStats = Self.loadAllUserStats()
         let count = Feature.allCases.filter {
@@ -397,7 +392,7 @@ final class ScoreEngine {
     ///   - wasStressed: `true` if the user confirms they were stressed; `false` if calm.
     ///
     /// This mirrors `_simulate_online_learning` in `app_accuracy.py` (PART 5):
-    ///   target   = +1 (stressed) or −1 (calm)
+    ///   target   = -1 (stressed) or +1 (calm)       ← negative = stressed convention
     ///   residual = score − target
     ///   grad     = residual  if |residual| ≤ δ,  else δ·sign(residual)   (Huber)
     ///   w ← w · (1 − λ·lr) − lr · grad · z        (L2 weight decay)
@@ -417,7 +412,7 @@ final class ScoreEngine {
             feedbackCount: 0
         )
 
-        let target = wasStressed ? 1.0 : -1.0
+        let target = wasStressed ? -1.0 : 1.0
 
         // Compute per-feature z-scores (same logic as computeScore)
         var zScores: [Feature: Double] = [:]

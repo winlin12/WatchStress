@@ -12,9 +12,9 @@
       "test": 4038
     },
     "accuracy": {
-      "train": 0.6082,
+      "train": 0.603,
       "val": 0.5694,
-      "test": 0.5773
+      "test": 0.5691
     },
     "window_min": 30,
     "l2": 1.0,
@@ -30,49 +30,49 @@
       "HR_mean_5",
       "HRV_5"
     ],
-    "notes": "Weights are raw logistic regression coefficients. weights_display is linearly scaled to [-100, +100] for readability. bias is threshold-calibrated on the val set. Score = clip(b + sum(w_i * z_i), -3, +3)  where z_i = clip((x_i - mu_i)/sigma_i, -3, 3). Positive score = stressed, negative = calm, threshold at 0."
+    "notes": "Weights are negated logistic regression coefficients (\u00d7\u22121 after training). weights_display is linearly scaled to [-100, +100] for readability. bias is threshold-calibrated on the val set. Score = clip(b + sum(w_i * z_i), -3, +3)  where z_i = clip((x_i - mu_i)/sigma_i, -3, 3). Negative score = stressed, positive = calm, threshold at 0. Matches ScoreEngine.swift: score < 0 \u2192 stressed (red), score > 0 \u2192 calm (green)."
   },
   "priors": {
     "HR_mean_30": {
-      "mean": 99.43415,
-      "std": 22.053665
+      "mean": 99.412356,
+      "std": 22.065785
     },
     "HR_std_30": {
-      "mean": 13.338215,
-      "std": 7.119619
+      "mean": 13.190543,
+      "std": 7.213861
     },
     "HR_slope_30": {
-      "mean": 0.542045,
-      "std": 28.24599
+      "mean": 0.133184,
+      "std": 2.841273
     },
     "HRV_30": {
-      "mean": 68.036373,
-      "std": 17.083811
+      "mean": 68.035729,
+      "std": 17.079546
     },
     "HR_mean_5": {
-      "mean": 100.869858,
-      "std": 24.628119
+      "mean": 100.847254,
+      "std": 24.639069
     },
     "HRV_5": {
-      "mean": 66.030545,
-      "std": 17.289169
+      "mean": 66.030257,
+      "std": 17.284834
     }
   },
   "weights": {
-    "HR_mean_30": 0.021623,
-    "HR_std_30": 0.197205,
-    "HR_slope_30": -0.196903,
-    "HRV_30": -0.018876,
-    "HR_mean_5": -0.473114,
-    "HRV_5": 0.019374
+    "HR_mean_30": -0.053015,
+    "HR_std_30": -0.190509,
+    "HR_slope_30": 0.15162,
+    "HRV_30": 0.021698,
+    "HR_mean_5": 0.516155,
+    "HRV_5": -0.020133
   },
   "weights_display": {
-    "HR_mean_30": 4.5703,
-    "HR_std_30": 41.6823,
-    "HR_slope_30": -41.6185,
-    "HRV_30": -3.9897,
-    "HR_mean_5": -100.0,
-    "HRV_5": 4.0949
+    "HR_mean_30": -10.2712,
+    "HR_std_30": -36.9093,
+    "HR_slope_30": 29.375,
+    "HRV_30": 4.2038,
+    "HR_mean_5": 100.0,
+    "HRV_5": -3.9006
   },
-  "bias": -0.176811
+  "bias": 0.169618
 }
